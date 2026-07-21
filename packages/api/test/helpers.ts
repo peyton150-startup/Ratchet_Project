@@ -4,6 +4,8 @@ import type { AddressInfo } from 'node:net';
 import type { Express } from 'express';
 import { createPool } from '../src/db';
 import { hashApiKey } from '../src/auth';
+import { entityTypeFor, type EventType } from '../src/events/eventTypes';
+import type { Rule } from '../src/rules/types';
 
 const ADMIN_URL = process.env.ADMIN_DATABASE_URL ?? process.env.DATABASE_URL;
 const APP_URL = process.env.DATABASE_URL;
@@ -47,6 +49,64 @@ export async function countFor(tenantId: string): Promise<{ events: number; outb
     [tenantId],
   );
   return { events: e.rows[0]!.c, outbox: o.rows[0]!.c };
+}
+
+// --- Phase 2b seeding/inspection (admin pool bypasses RLS) ---
+
+export interface SeedEventInput {
+  type: EventType;
+  entityId: string;
+  payload?: Record<string, unknown>;
+  delta?: Record<string, unknown>;
+  occurredAt?: string;
+}
+
+export async function seedEvent(tenantId: string, e: SeedEventInput): Promise<void> {
+  await adminPool.query(
+    `INSERT INTO events (id, tenant_id, event_type, entity_type, entity_id, occurred_at, delta, payload)
+     VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7)`,
+    [
+      tenantId,
+      e.type,
+      entityTypeFor(e.type),
+      e.entityId,
+      e.occurredAt ?? new Date().toISOString(),
+      JSON.stringify(e.delta ?? {}),
+      JSON.stringify(e.payload ?? {}),
+    ],
+  );
+}
+
+export async function seedRule(tenantId: string, rule: Rule): Promise<void> {
+  await adminPool.query(
+    `INSERT INTO rules (tenant_id, rule_key, version, trigger, condition, action, active)
+     VALUES ($1, $2, $3, $4, $5, $6, true)`,
+    [
+      tenantId,
+      rule.ruleKey,
+      rule.version,
+      JSON.stringify(rule.trigger),
+      rule.condition === null ? null : JSON.stringify(rule.condition),
+      JSON.stringify(rule.action),
+    ],
+  );
+}
+
+export interface AuditRow {
+  rule_key: string;
+  rule_version: number;
+  trigger_type: string;
+  matched: boolean;
+  dry_run: boolean;
+}
+
+export async function auditFor(tenantId: string): Promise<AuditRow[]> {
+  const res = await adminPool.query<AuditRow>(
+    `SELECT rule_key, rule_version, trigger_type, matched, dry_run
+       FROM rule_audit WHERE tenant_id = $1 ORDER BY created_at`,
+    [tenantId],
+  );
+  return res.rows;
 }
 
 export interface RunningServer {

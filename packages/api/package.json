@@ -7,6 +7,8 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx watch src/index.ts",
+    "migrate": "tsx scripts/migrate.ts",
+    "test": "node --import tsx --test test/ingest.test.ts test/rls.test.ts",
     "lint": "eslint src --ext .ts"
   },
   "keywords": [],
@@ -15,7 +17,8 @@
   "dependencies": {
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
-    "pg": "^8.13.1"
+    "pg": "^8.13.1",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/express": "^4.17.21",

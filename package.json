@@ -1,0 +1,13 @@
+{
+  "name": "ratchet",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Ratchet — multi-tenant task orchestration platform",
+  "scripts": {
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r exec tsc --noEmit",
+    "test": "pnpm -r test",
+    "migrate": "pnpm --filter @workspace/api migrate"
+  },
+  "license": "ISC"
+}

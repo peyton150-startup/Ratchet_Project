@@ -8,7 +8,7 @@
     "build": "tsc",
     "dev": "tsx watch src/index.ts",
     "migrate": "tsx scripts/migrate.ts",
-    "test": "node --import tsx --test test/ingest.test.ts test/rls.test.ts test/rules.test.ts",
+    "test": "node --import tsx --test test/ingest.test.ts test/rls.test.ts test/rules.test.ts test/tasks.test.ts",
     "lint": "eslint src --ext .ts"
   },
   "keywords": [],

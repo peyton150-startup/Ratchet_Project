@@ -8,7 +8,8 @@
     "build": "tsc",
     "dev": "tsx watch src/index.ts",
     "migrate": "tsx scripts/migrate.ts",
-    "test": "node --import tsx --test test/ingest.test.ts test/rls.test.ts test/rules.test.ts test/tasks.test.ts",
+    "worker": "tsx src/pipeline/worker.ts",
+    "test": "node --import tsx --test test/ingest.test.ts test/rls.test.ts test/rules.test.ts test/tasks.test.ts test/pipeline.test.ts",
     "lint": "eslint src --ext .ts"
   },
   "keywords": [],
@@ -17,6 +18,7 @@
   "dependencies": {
     "dotenv": "^16.3.1",
     "express": "^4.18.2",
+    "ioredis": "^5.4.1",
     "pg": "^8.13.1",
     "zod": "^3.23.8"
   },

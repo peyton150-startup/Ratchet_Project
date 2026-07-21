@@ -9,6 +9,25 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: app
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      # Admin role runs migrations (creates the app role, sets FORCE RLS).
+      ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/app
+      # App role is RLS-enforced; the API and integration tests use it.
+      DATABASE_URL: postgresql://ratchet_app:ratchet_app@localhost:5432/app
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v2
@@ -21,3 +40,5 @@ jobs:
       - run: pnpm install
       - run: pnpm -r exec tsc --noEmit
       - run: pnpm -r build
+      - run: pnpm --filter @workspace/api migrate
+      - run: pnpm --filter @workspace/api test

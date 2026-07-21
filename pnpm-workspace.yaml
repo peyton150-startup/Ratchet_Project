@@ -3,5 +3,8 @@ packages:
   - 'packages/workers'
   - 'packages/web'
   - 'packages/sdk'
-allowBuilds:
-  esbuild: set this to true or false
+
+# Allow esbuild (pulled in by tsx) to run its install script so its native
+# binary is fetched during `pnpm install` in CI.
+onlyBuiltDependencies:
+  - esbuild

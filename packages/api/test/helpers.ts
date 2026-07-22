@@ -31,12 +31,20 @@ export async function seedTenant(name: string): Promise<SeededTenant> {
     [name],
   );
   const tenantId = t.rows[0]!.id;
+  // Default key is admin so existing tests can exercise any RBAC-gated route.
+  const rawKey = await seedKey(tenantId, 'admin');
+  return { tenantId, rawKey };
+}
+
+/** Create an API key with a specific role and return the raw key. */
+export async function seedKey(tenantId: string, role: 'operator' | 'admin' | 'integrator'): Promise<string> {
   const rawKey = randomUUID();
-  await adminPool.query('INSERT INTO api_keys (tenant_id, key_hash) VALUES ($1, $2)', [
+  await adminPool.query('INSERT INTO api_keys (tenant_id, key_hash, role) VALUES ($1, $2, $3)', [
     tenantId,
     hashApiKey(rawKey),
+    role,
   ]);
-  return { tenantId, rawKey };
+  return rawKey;
 }
 
 export async function countFor(tenantId: string): Promise<{ events: number; outbox: number }> {

@@ -8,6 +8,7 @@ declare global {
   namespace Express {
     interface Request {
       tenantId?: string;
+      role?: string;
     }
   }
 }
@@ -31,16 +32,17 @@ export function authMiddleware(pool: Pool) {
     }
     try {
       const keyHash = hashApiKey(match[1].trim());
-      const result = await pool.query<{ ratchet_authenticate: string | null }>(
-        'SELECT ratchet_authenticate($1) AS ratchet_authenticate',
+      const result = await pool.query<{ tenant_id: string | null; role: string | null }>(
+        'SELECT tenant_id, role FROM ratchet_authenticate($1)',
         [keyHash],
       );
-      const tenantId = result.rows[0]?.ratchet_authenticate ?? null;
-      if (!tenantId) {
+      const row = result.rows[0];
+      if (!row || !row.tenant_id) {
         res.status(401).json({ error: 'invalid API key' });
         return;
       }
-      req.tenantId = tenantId;
+      req.tenantId = row.tenant_id;
+      req.role = row.role ?? undefined;
       next();
     } catch (err) {
       next(err);

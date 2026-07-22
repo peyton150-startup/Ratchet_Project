@@ -7,6 +7,14 @@ import { hashApiKey } from '../src/auth';
 import { entityTypeFor, type EventType } from '../src/events/eventTypes';
 import type { Rule } from '../src/rules/types';
 
+// TEST ISOLATION CONTRACT
+// -----------------------
+// Node's test runner executes these files CONCURRENTLY against ONE shared database, so:
+//   1. Never TRUNCATE or otherwise mutate global state — you will wipe another file's rows mid-test.
+//   2. Give every test its own tenant via seedTenant(), and scope every assertion to that tenant.
+//   3. Never assert on global counts (e.g. "SELECT count(*) FROM events"); always filter by tenant_id.
+// Both rules were learned from real failures: a beforeEach TRUNCATE race, and a global relay count
+// that other files contributed to. Tenant-scoping is what makes concurrent files safe.
 const ADMIN_URL = process.env.ADMIN_DATABASE_URL ?? process.env.DATABASE_URL;
 const APP_URL = process.env.DATABASE_URL;
 

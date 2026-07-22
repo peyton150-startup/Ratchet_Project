@@ -48,8 +48,9 @@ jobs:
           node-version: 20
           cache: pnpm
       - run: pnpm install
-      - run: pnpm -r exec tsc --noEmit
+      # Build first: the API imports @workspace/sdk, whose type declarations come from its dist.
       - run: pnpm -r build
+      - run: pnpm -r exec tsc --noEmit
       - run: pnpm --filter @workspace/api migrate
       - run: pnpm --filter @workspace/api test
       - run: pnpm --filter @workspace/sdk test

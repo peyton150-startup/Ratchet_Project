@@ -1,4 +1,4 @@
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import { withTenant } from '../db';
 
 // GraphQL-facing task shape (camelCase), mapped from the tasks table.
@@ -82,11 +82,14 @@ export async function listTasks(pool: Pool, tenantId: string, filter: TaskFilter
   });
 }
 
+/** Read a task inside an existing tenant transaction (no new connection/transaction). */
+export async function getTaskTx(client: PoolClient, id: string): Promise<TaskView | null> {
+  const r = await client.query<TaskRow>(`SELECT ${COLUMNS} FROM tasks WHERE id = $1`, [id]);
+  return r.rowCount === 0 ? null : toView(r.rows[0]!);
+}
+
 export async function getTask(pool: Pool, tenantId: string, id: string): Promise<TaskView | null> {
-  return withTenant(pool, tenantId, async (c) => {
-    const r = await c.query<TaskRow>(`SELECT ${COLUMNS} FROM tasks WHERE id = $1`, [id]);
-    return r.rowCount === 0 ? null : toView(r.rows[0]!);
-  });
+  return withTenant(pool, tenantId, (c) => getTaskTx(c, id));
 }
 
 export interface QueueView {

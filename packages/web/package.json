@@ -1,18 +1,32 @@
 {
   "name": "@workspace/web",
   "version": "0.0.1",
-  "description": "Web application",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "description": "Ratchet consoles (operator + admin)",
+  "private": true,
+  "type": "module",
   "scripts": {
-    "build": "tsc",
-    "dev": "tsc --watch",
+    "build": "tsc --noEmit && vite build",
+    "dev": "vite",
+    "preview": "vite preview",
+    "test": "node --import tsx --test src/lib/*.test.ts",
     "lint": "eslint src --ext .ts,.tsx"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
+  "dependencies": {
+    "@workspace/sdk": "workspace:*",
+    "graphql-ws": "^5.16.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
   "devDependencies": {
-    "typescript": "^5.3.3"
+    "@types/node": "^20.10.6",
+    "@types/react": "^18.3.3",
+    "@types/react-dom": "^18.3.0",
+    "@vitejs/plugin-react": "^4.3.1",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3",
+    "vite": "^5.3.4"
   }
 }

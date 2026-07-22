@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
-import { RatchetClient, RatchetError, verifyWebhookSignature } from '../src/index';
+import { RatchetClient, RatchetError } from '../src/index';
+import { verifyWebhookSignature } from '../src/signing';
 
 // A fake fetch that records calls and returns queued responses.
 interface Call {

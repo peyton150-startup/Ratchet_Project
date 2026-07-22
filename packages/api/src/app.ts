@@ -6,9 +6,10 @@ import { authMiddleware } from './auth';
 import { requirePermission } from './authz';
 import { eventsRouter } from './events/route';
 import { schema } from './graphql/schema';
+import type { TaskPubSub } from './pubsub';
 
 /** Build the Express app around a given pool. Kept separate from listen() so tests can drive it. */
-export function buildApp(pool: Pool): Express {
+export function buildApp(pool: Pool, pubsub?: TaskPubSub): Express {
   const app = express();
   app.use(express.json());
 
@@ -37,7 +38,7 @@ export function buildApp(pool: Pool): Express {
       schema,
       context: (req) => {
         const raw = req.raw as { tenantId?: string; role?: string };
-        return { pool, tenantId: raw.tenantId, role: raw.role };
+        return { pool, tenantId: raw.tenantId, role: raw.role, pubsub };
       },
     }),
   );

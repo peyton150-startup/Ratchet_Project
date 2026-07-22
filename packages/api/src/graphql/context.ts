@@ -1,11 +1,13 @@
 import type { Pool } from 'pg';
 import { GraphQLError } from 'graphql';
 import { can, isRole, type Permission } from '../authz';
+import type { TaskPubSub } from '../pubsub';
 
 export interface GraphQLContext {
   pool: Pool;
   tenantId?: string;
   role?: string;
+  pubsub?: TaskPubSub;
 }
 
 /** Require an authenticated tenant + a role holding `permission`, else throw a GraphQL error. */

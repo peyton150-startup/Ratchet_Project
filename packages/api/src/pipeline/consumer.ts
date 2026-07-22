@@ -4,7 +4,9 @@ import type { Redis } from '../redis';
 import { RulesEngine, type EngineEvent } from '../rules/engine';
 import { TaskProcessor } from '../tasks/processor';
 import { insertDeadLetter } from '../tasks/service';
+import { getTask } from '../tasks/read';
 import type { RoutingService } from '../routing/assign';
+import type { TaskPubSub } from '../pubsub';
 
 export interface ConsumeDeps {
   redis: Redis;
@@ -12,6 +14,7 @@ export interface ConsumeDeps {
   engine: RulesEngine;
   processor: TaskProcessor;
   routing?: RoutingService; // optional: when set, newly created tasks are auto-assigned
+  pubsub?: TaskPubSub; // optional: when set, created/assigned tasks are published for live updates
 }
 
 export interface ConsumeOptions {
@@ -100,14 +103,16 @@ async function handleEntry(
     const decisions = await deps.engine.evaluateEvent(msg.tenantId, event);
     for (const decision of decisions) {
       const outcome = await deps.processor.processDecision(msg.tenantId, msg.eventId, decision);
-      if (
-        deps.routing &&
-        outcome.status === 'ok' &&
-        outcome.result?.kind === 'created' &&
-        outcome.result.task.created
-      ) {
-        // Best-effort: an unassignable task (no queue/agent) stays unassigned, not failed.
-        await deps.routing.assign(msg.tenantId, outcome.result.task.taskId).catch(() => {});
+      if (outcome.status === 'ok' && outcome.result?.kind === 'created' && outcome.result.task.created) {
+        const taskId = outcome.result.task.taskId;
+        if (deps.routing) {
+          // Best-effort: an unassignable task (no queue/agent) stays unassigned, not failed.
+          await deps.routing.assign(msg.tenantId, taskId).catch(() => {});
+        }
+        if (deps.pubsub) {
+          const task = await getTask(deps.appPool, msg.tenantId, taskId);
+          if (task) await deps.pubsub.publish(msg.tenantId, task);
+        }
       }
     }
   } catch (err) {

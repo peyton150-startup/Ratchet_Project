@@ -133,6 +133,84 @@ test('events query returns entity history for the task detail view', async () =>
   assert.equal(events[0]!.type, 'application.updated', 'newest first');
 });
 
+const draftRule = {
+  ruleKey: 'R99',
+  trigger: { type: 'event', event: 'application.submitted' },
+  condition: null,
+  action: { kind: 'create_task', queue: 'intake', sla: '4h', template: 'Check' },
+};
+
+test('createRuleVersion publishes versions and supersedes the previous one', async () => {
+  const t = await seedTenant('gql-rules');
+  const ctx = { pool: appPool, tenantId: t.tenantId, role: 'admin' };
+  const mutation =
+    'mutation($input: RuleVersionInput!) { createRuleVersion(input: $input) { ruleKey version active } }';
+
+  const v1 = await exec(mutation, ctx, { input: draftRule });
+  assert.equal(v1.errors, undefined);
+  assert.equal((v1.data!['createRuleVersion'] as { version: number }).version, 1);
+
+  const v2 = await exec(mutation, ctx, {
+    input: { ...draftRule, action: { ...draftRule.action, sla: '8h' } },
+  });
+  assert.equal((v2.data!['createRuleVersion'] as { version: number }).version, 2);
+
+  const listed = await exec('{ rules { ruleKey version active } }', ctx);
+  const rules = listed.data!['rules'] as Array<{ version: number; active: boolean }>;
+  assert.equal(rules.length, 2, 'history keeps superseded versions');
+  assert.equal(rules.find((r) => r.version === 2)!.active, true);
+  assert.equal(rules.find((r) => r.version === 1)!.active, false, 'previous version deactivated');
+});
+
+test('createRuleVersion rejects an invalid rule', async () => {
+  const t = await seedTenant('gql-rules-bad');
+  const res = await exec(
+    'mutation($input: RuleVersionInput!) { createRuleVersion(input: $input) { version } }',
+    { pool: appPool, tenantId: t.tenantId, role: 'admin' },
+    { input: { ...draftRule, action: { ...draftRule.action, sla: 'whenever' } } },
+  );
+  assert.ok(res.errors && res.errors.length > 0);
+  assert.equal(res.errors[0]!.extensions?.code, 'INVALID_RULE');
+});
+
+test('rules mutations require rules:write', async () => {
+  const t = await seedTenant('gql-rules-rbac');
+  // operator has rules:read but not rules:write
+  const read = await exec('{ rules { version } }', { pool: appPool, tenantId: t.tenantId, role: 'operator' });
+  assert.equal(read.errors, undefined, 'operator may read rules');
+
+  const write = await exec(
+    'mutation($input: RuleVersionInput!) { createRuleVersion(input: $input) { version } }',
+    { pool: appPool, tenantId: t.tenantId, role: 'operator' },
+    { input: draftRule },
+  );
+  assert.equal(write.errors?.[0]?.extensions?.code, 'FORBIDDEN');
+});
+
+test('dryRunRule evaluates a draft without persisting it', async () => {
+  const t = await seedTenant('gql-dryrun');
+  const ctx = { pool: appPool, tenantId: t.tenantId, role: 'admin' };
+  const res = await exec(
+    'mutation($rule: JSON!, $event: JSON!) { dryRunRule(rule: $rule, event: $event) { matched decision } }',
+    ctx,
+    {
+      rule: { ...draftRule, version: 1 },
+      event: { type: 'application.submitted', entityId: 'app-1', entityType: 'LoanApplication' },
+    },
+  );
+  assert.equal(res.errors, undefined);
+  assert.equal((res.data!['dryRunRule'] as { matched: boolean }).matched, true);
+
+  // Nothing was stored: the draft never becomes a rule version, and no audit row is written.
+  const stored = await exec('{ rules { version } }', ctx);
+  assert.equal((stored.data!['rules'] as unknown[]).length, 0);
+  const audit = await adminPool.query<{ c: number }>(
+    'SELECT count(*)::int AS c FROM rule_audit WHERE tenant_id = $1',
+    [t.tenantId],
+  );
+  assert.equal(audit.rows[0]!.c, 0, 'dry run writes no audit');
+});
+
 test('HTTP /graphql endpoint works end-to-end with auth', async () => {
   const t = await seedTenant('gql-http');
   await seedTask(t.tenantId);

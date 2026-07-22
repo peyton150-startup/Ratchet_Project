@@ -9,6 +9,16 @@ export interface ConsoleApiOptions {
   apiKey: string;
 }
 
+export interface RuleVersion {
+  ruleKey: string;
+  version: number;
+  trigger: unknown;
+  condition: unknown;
+  action: unknown;
+  active: boolean;
+  createdAt: string;
+}
+
 /**
  * Console-facing API: REST/GraphQL via the published SDK, plus a graphql-ws subscription for live
  * queue updates. Deliberately thin — the SDK is the single definition of the surface, so the
@@ -40,6 +50,50 @@ export class ConsoleApi {
     if (action === 'claim') return this.client.claimTask(id);
     if (action === 'complete') return this.client.completeTask(id);
     return this.client.blockTask(id);
+  }
+
+  /** All stored rule versions (including superseded) — the admin console's history + diffs. */
+  rules(): Promise<RuleVersion[]> {
+    return this.client
+      .graphql<{ rules: RuleVersion[] }>(
+        '{ rules { ruleKey version trigger condition action active createdAt } }',
+      )
+      .then((d) => d.rules);
+  }
+
+  /** Publish the next version of a rule. */
+  createRuleVersion(draft: {
+    ruleKey: string;
+    trigger: unknown;
+    condition: unknown;
+    action: unknown;
+  }): Promise<RuleVersion> {
+    return this.client
+      .graphql<{ createRuleVersion: RuleVersion }>(
+        `mutation($input: RuleVersionInput!) {
+           createRuleVersion(input: $input) { ruleKey version trigger condition action active createdAt }
+         }`,
+        {
+          input: {
+            ruleKey: draft.ruleKey,
+            trigger: draft.trigger,
+            condition: draft.condition,
+            action: draft.action,
+          },
+        },
+      )
+      .then((d) => d.createRuleVersion);
+  }
+
+  /** Evaluate a draft rule against a sample event without persisting anything. */
+  dryRunRule(rule: unknown, event: unknown): Promise<{ matched: boolean; decision: unknown }> {
+    return this.client
+      .graphql<{ dryRunRule: { matched: boolean; decision: unknown } }>(
+        'mutation($rule: JSON!, $event: JSON!) { dryRunRule(rule: $rule, event: $event) { matched decision } }',
+        // The API validates a complete rule; drafts carry no version until published.
+        { rule: { ...(rule as Record<string, unknown>), version: 1 }, event },
+      )
+      .then((d) => d.dryRunRule);
   }
 
   /** Event history for a task's subject entity — the "task detail with event history" view. */

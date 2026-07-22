@@ -1,7 +1,12 @@
 import type { Pool } from 'pg';
 import { withTenant } from '../db';
 import type { Decision } from '../rules/engine';
-import { createTaskFromDecision, insertDeadLetter, type CreateResult } from './service';
+import {
+  createTaskFromDecision,
+  cancelTasksForApplication,
+  insertDeadLetter,
+  type CreateResult,
+} from './service';
 
 export interface RetryPolicy {
   maxAttempts: number;
@@ -45,9 +50,15 @@ export async function processWithRetry<T>(
   return { status: 'dead_lettered', attempts: policy.maxAttempts, error: lastError };
 }
 
+export type ProcessResult =
+  | { kind: 'created'; task: CreateResult }
+  | { kind: 'cancelled'; taskIds: string[] };
+
 /**
- * Process one engine decision into a task with retry/backoff; poison messages are dead-lettered.
- * Task creation is exactly-once, so a retry that follows a partial failure will not duplicate.
+ * Process one engine decision with retry/backoff; poison messages are dead-lettered. Dispatches on
+ * the action kind: create_task creates a task (exactly-once, so retries never duplicate);
+ * cancel_tasks cancels an application's non-terminal tasks (R12). The application is taken from the
+ * decision subject (applicationId, falling back to entityId).
  */
 export class TaskProcessor {
   constructor(
@@ -60,10 +71,24 @@ export class TaskProcessor {
     eventId: string | null,
     decision: Decision,
     sleep?: Sleep,
-  ): Promise<RetryOutcome<CreateResult>> {
+  ): Promise<RetryOutcome<ProcessResult>> {
+    const handler = (): Promise<ProcessResult> =>
+      withTenant(this.pool, tenantId, async (c): Promise<ProcessResult> => {
+        if (decision.action.kind === 'cancel_tasks') {
+          const applicationId =
+            (decision.subject['applicationId'] as string | undefined) ??
+            (decision.subject['entityId'] as string | undefined) ??
+            '';
+          const taskIds = await cancelTasksForApplication(c, applicationId);
+          return { kind: 'cancelled', taskIds };
+        }
+        const task = await createTaskFromDecision(c, tenantId, eventId, decision);
+        return { kind: 'created', task };
+      });
+
     return processWithRetry(
       this.policy,
-      () => withTenant(this.pool, tenantId, (c) => createTaskFromDecision(c, tenantId, eventId, decision)),
+      handler,
       (attempts, error) =>
         withTenant(this.pool, tenantId, (c) =>
           insertDeadLetter(c, tenantId, {

@@ -4,6 +4,7 @@ import type { Redis } from '../redis';
 export interface RelayOptions {
   streamKey: string;
   batchSize?: number;
+  maxLen?: number; // approximate MAXLEN cap for the stream
 }
 
 interface OutboxRow {
@@ -37,8 +38,13 @@ export async function drainOutbox(admin: Pool, redis: Redis, opts: RelayOptions)
       [batchSize],
     );
     for (const row of rows.rows) {
+      // MAXLEN ~ bounds stream growth (approximate trim; consumed entries are the source of truth
+      // for delivery, the event log is the source of truth for data).
       await redis.xadd(
         opts.streamKey,
+        'MAXLEN',
+        '~',
+        opts.maxLen ?? 100_000,
         '*',
         'tenantId',
         row.tenant_id,

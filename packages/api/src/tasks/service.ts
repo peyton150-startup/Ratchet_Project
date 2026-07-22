@@ -82,6 +82,20 @@ export async function transitionTask(
   return to;
 }
 
+/** Cancel all non-terminal tasks for an application (R12). Returns the cancelled task ids. */
+export async function cancelTasksForApplication(
+  client: PoolClient,
+  applicationId: string,
+): Promise<string[]> {
+  const res = await client.query<{ id: string }>(
+    `UPDATE tasks SET state = 'cancelled', updated_at = now()
+      WHERE subject->>'applicationId' = $1 AND state IN ('open', 'claimed', 'blocked')
+    RETURNING id`,
+    [applicationId],
+  );
+  return res.rows.map((r) => r.id);
+}
+
 export interface DeadLetterInput {
   source: string;
   reference: string | null;
@@ -127,14 +141,6 @@ export class TaskService {
 
   /** R12: cancel all non-terminal tasks for an application. Returns the cancelled task ids. */
   cancelForApplication(tenantId: string, applicationId: string): Promise<string[]> {
-    return withTenant(this.pool, tenantId, async (c) => {
-      const res = await c.query<{ id: string }>(
-        `UPDATE tasks SET state = 'cancelled', updated_at = now()
-          WHERE subject->>'applicationId' = $1 AND state IN ('open', 'claimed', 'blocked')
-        RETURNING id`,
-        [applicationId],
-      );
-      return res.rows.map((r) => r.id);
-    });
+    return withTenant(this.pool, tenantId, (c) => cancelTasksForApplication(c, applicationId));
   }
 }

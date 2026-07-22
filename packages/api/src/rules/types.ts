@@ -52,7 +52,8 @@ export const actionSchema = z.union([
     .object({
       kind: z.literal('create_task'),
       queue: z.string(),
-      sla: z.string(),
+      // SLA duration like 4h / 30m / 2d / 90s — validated so a bad rule fails fast, not at runtime.
+      sla: z.string().regex(/^\d+[smhd]$/, 'SLA must be a number followed by s, m, h, or d'),
       priority: z.number().int().optional(),
       template: z.string(),
     })

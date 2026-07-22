@@ -70,6 +70,29 @@ test('malformed payload: rejected with 400 and nothing is written', async () => 
   assert.deepEqual(await countFor(tenant.tenantId), { events: 0, outbox: 0 });
 });
 
+test('idempotency key reused with a different body is rejected with 409', async () => {
+  const body = {
+    idempotencyKey: 'conflict-1',
+    type: 'application.submitted',
+    entityId: 'app-1',
+    payload: { amount: 100 },
+  };
+  const first = await postEvent(server.url, tenant.rawKey, body);
+  assert.equal(first.status, 201);
+
+  // Same key, different payload -> conflict.
+  const different = await postEvent(server.url, tenant.rawKey, {
+    ...body,
+    payload: { amount: 999 },
+  });
+  assert.equal(different.status, 409);
+
+  // Same key, same body -> still a clean replay.
+  const same = await postEvent(server.url, tenant.rawKey, body);
+  assert.equal(same.status, 200);
+  assert.equal(same.json.eventId, first.json.eventId);
+});
+
 test('concurrent identical events: exactly one event and one outbox row', async () => {
   const body = {
     idempotencyKey: 'race-1',

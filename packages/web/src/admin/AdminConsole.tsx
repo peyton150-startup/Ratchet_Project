@@ -3,6 +3,7 @@ import type { ConsoleApi, RuleVersion } from '../lib/api';
 import {
   COMPARISON_OPS,
   STATE_PREDICATES,
+  EVENT_TYPES,
   addToGroup,
   describeCondition,
   diffVersions,
@@ -14,20 +15,6 @@ import {
   type RuleDraft,
 } from '../lib/rules';
 import { Badge, Button, Card, EmptyState, PageShell, Toolbar, tokens } from '../components';
-
-const EVENT_TYPES = [
-  'application.submitted',
-  'application.updated',
-  'application.withdrawn',
-  'document.uploaded',
-  'document.rejected',
-  'verification.completed',
-  'underwriting.decision_recorded',
-  'condition.created',
-  'condition.cleared',
-  'borrower.updated',
-  'closing.scheduled',
-];
 
 const emptyDraft = (): RuleDraft => ({
   ruleKey: '',

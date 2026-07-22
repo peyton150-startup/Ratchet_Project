@@ -5,7 +5,7 @@ import type {
   TaskFilter,
   Webhook,
   RegisteredWebhook,
-} from './types';
+} from './types.js';
 
 export class RatchetError extends Error {
   constructor(

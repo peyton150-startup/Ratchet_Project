@@ -2,6 +2,7 @@ import type { Pool, PoolClient } from 'pg';
 import { withTenant } from '../db';
 import type { Decision } from '../rules/engine';
 import { nextState, slaDueAt, type TaskAction, type TaskState } from './stateMachine';
+import { ACTIVE_STATES_SQL, TERMINAL_STATES_SQL } from './stateSql';
 
 export interface CreateResult {
   taskId: string;
@@ -89,7 +90,7 @@ export async function cancelTasksForApplication(
 ): Promise<string[]> {
   const res = await client.query<{ id: string }>(
     `UPDATE tasks SET state = 'cancelled', updated_at = now()
-      WHERE subject->>'applicationId' = $1 AND state IN ('open', 'claimed', 'blocked')
+      WHERE subject->>'applicationId' = $1 AND state IN (${ACTIVE_STATES_SQL})
     RETURNING id`,
     [applicationId],
   );
@@ -132,7 +133,7 @@ export class TaskService {
     return withTenant(this.pool, tenantId, async (c) => {
       const res = await c.query<{ id: string }>(
         `SELECT id FROM tasks
-          WHERE sla_due_at < $1 AND state NOT IN ('completed', 'cancelled')`,
+          WHERE sla_due_at < $1 AND state NOT IN (${TERMINAL_STATES_SQL})`,
         [now.toISOString()],
       );
       return res.rows.map((r) => r.id);

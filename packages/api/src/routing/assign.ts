@@ -1,5 +1,7 @@
 import type { Pool, PoolClient } from 'pg';
 import { withTenant } from '../db';
+import { ACTIVE_STATES_SQL } from '../tasks/stateSql';
+import { isTerminalState } from '@workspace/sdk';
 
 export type Strategy = 'round_robin' | 'skill_tag' | 'capacity';
 
@@ -41,7 +43,7 @@ async function loadCandidates(client: PoolClient, queue: string): Promise<Candid
   }>(
     `SELECT a.id, a.capacity, a.skills, a.last_assigned_at,
             (SELECT count(*)::int FROM tasks t
-              WHERE t.assignee = a.id AND t.state IN ('open','claimed','blocked')) AS load
+              WHERE t.assignee = a.id AND t.state IN (${ACTIVE_STATES_SQL})) AS load
        FROM agents a
        JOIN queue_members m ON m.agent_id = a.id AND m.queue = $1
       WHERE a.active`,
@@ -99,7 +101,7 @@ export async function assignTask(
     [taskId],
   );
   if (task.rowCount === 0) return { assigned: false, reason: 'task_not_found' };
-  if (['completed', 'cancelled'].includes(task.rows[0]!.state)) {
+  if (isTerminalState(task.rows[0]!.state)) {
     return { assigned: false, reason: 'task_terminal' };
   }
 

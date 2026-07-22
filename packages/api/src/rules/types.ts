@@ -1,26 +1,14 @@
 import { z } from 'zod';
-import { EVENT_TYPES } from '../events/eventTypes';
+import { EVENT_TYPES, SLA_PATTERN, SLA_HINT, QUEUE_STRATEGIES, type Condition } from '@workspace/sdk';
 
 // ---- Condition tree (ADR-004) ---------------------------------------------------------------
-// Namespaced refs: "event.*", "payload.*", "delta.*", "state.*". Comparisons are [ref, literal].
-// changed(field) is first-class for R10; { state: name } evaluates an allowlisted predicate (R7).
+// The Condition shape, event catalog, SLA format and queue strategies come from the shared domain
+// module (packages/sdk/src/domain.ts). This file adds only the runtime validation the server needs,
+// so the schema and the type can never describe different things.
+export type { Condition };
 
 const literal = z.union([z.string(), z.number(), z.boolean(), z.null(), z.array(z.unknown())]);
 const comparison = z.tuple([z.string(), literal]);
-
-export type Condition =
-  | { and: Condition[] }
-  | { or: Condition[] }
-  | { not: Condition }
-  | { changed: string }
-  | { state: string }
-  | { eq: [string, unknown] }
-  | { neq: [string, unknown] }
-  | { gt: [string, unknown] }
-  | { lt: [string, unknown] }
-  | { gte: [string, unknown] }
-  | { lte: [string, unknown] }
-  | { in: [string, unknown] };
 
 export const conditionSchema: z.ZodType<Condition> = z.lazy(() =>
   z.union([
@@ -53,7 +41,7 @@ export const actionSchema = z.union([
       kind: z.literal('create_task'),
       queue: z.string(),
       // SLA duration like 4h / 30m / 2d / 90s — validated so a bad rule fails fast, not at runtime.
-      sla: z.string().regex(/^\d+[smhd]$/, 'SLA must be a number followed by s, m, h, or d'),
+      sla: z.string().regex(SLA_PATTERN, SLA_HINT),
       priority: z.number().int().optional(),
       template: z.string(),
     })

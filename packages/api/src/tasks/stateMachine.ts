@@ -1,24 +1,19 @@
-// Explicit task state machine. Transitions are the only legal way to change a task's state;
-// anything else throws IllegalTransitionError (design doc §12: illegal state transitions).
+import {
+  TERMINAL_TASK_STATES,
+  parseSlaMs,
+  transitionTarget,
+  type TaskAction,
+  type TaskState,
+} from '@workspace/sdk';
 
-export type TaskState = 'open' | 'claimed' | 'blocked' | 'completed' | 'cancelled';
-export type TaskAction = 'claim' | 'complete' | 'block' | 'unblock' | 'release' | 'cancel';
+// The transition table, task states and SLA format live in the shared domain module so the API,
+// the consoles and integrators cannot drift apart. This file adds only the server-side concern the
+// shared module deliberately has no opinion on: how an illegal transition is reported.
 
-interface TransitionSpec {
-  from: TaskState[];
-  to: TaskState;
-}
+export type { TaskAction, TaskState };
+export { parseSlaMs };
 
-const TRANSITIONS: Record<TaskAction, TransitionSpec> = {
-  claim: { from: ['open'], to: 'claimed' },
-  complete: { from: ['claimed'], to: 'completed' },
-  block: { from: ['claimed'], to: 'blocked' },
-  unblock: { from: ['blocked'], to: 'claimed' },
-  release: { from: ['claimed'], to: 'open' },
-  cancel: { from: ['open', 'claimed', 'blocked'], to: 'cancelled' },
-};
-
-export const TERMINAL_STATES: ReadonlySet<TaskState> = new Set(['completed', 'cancelled']);
+export const TERMINAL_STATES: ReadonlySet<TaskState> = new Set(TERMINAL_TASK_STATES);
 
 export class IllegalTransitionError extends Error {
   constructor(
@@ -32,28 +27,16 @@ export class IllegalTransitionError extends Error {
 
 /** Return the next state for an action, or throw if the action is illegal from `current`. */
 export function nextState(current: TaskState, action: TaskAction): TaskState {
-  const spec = TRANSITIONS[action];
-  if (!spec.from.includes(current)) {
-    throw new IllegalTransitionError(current, action);
-  }
-  return spec.to;
+  const target = transitionTarget(current, action);
+  if (target === null) throw new IllegalTransitionError(current, action);
+  return target;
 }
 
-const DURATION_RE = /^(\d+)(s|m|h|d)$/;
-const UNIT_MS: Record<string, number> = {
-  s: 1000,
-  m: 60_000,
-  h: 3_600_000,
-  d: 86_400_000,
-};
-
-/** Parse an SLA duration like '4h', '30m', '2d', '90s' into milliseconds. */
+/** Parse an SLA duration like '4h' into milliseconds. */
 export function parseDuration(sla: string): number {
-  const m = DURATION_RE.exec(sla);
-  if (!m) throw new Error(`invalid SLA duration: ${sla}`);
-  return Number(m[1]) * UNIT_MS[m[2] as keyof typeof UNIT_MS]!;
+  return parseSlaMs(sla);
 }
 
 export function slaDueAt(from: Date, sla: string): Date {
-  return new Date(from.getTime() + parseDuration(sla));
+  return new Date(from.getTime() + parseSlaMs(sla));
 }

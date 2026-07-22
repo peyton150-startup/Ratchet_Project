@@ -1,6 +1,7 @@
 {
   "name": "@workspace/sdk",
   "version": "0.0.1",
+  "type": "module",
   "description": "Ratchet TypeScript SDK",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

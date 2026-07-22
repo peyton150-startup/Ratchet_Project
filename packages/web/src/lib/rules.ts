@@ -1,21 +1,21 @@
 // Rule authoring logic for the admin console: condition-tree editing, structural version diffs,
 // and validation. Kept pure so the builder's behaviour is testable without a DOM.
 
-// Mirrors the API's condition union (ADR-004). Comparison variants are spelled out rather than a
-// catch-all record so `'and' in c` narrows cleanly.
-export type Condition =
-  | { and: Condition[] }
-  | { or: Condition[] }
-  | { not: Condition }
-  | { changed: string }
-  | { state: string }
-  | { eq: [string, unknown] }
-  | { neq: [string, unknown] }
-  | { gt: [string, unknown] }
-  | { lt: [string, unknown] }
-  | { gte: [string, unknown] }
-  | { lte: [string, unknown] }
-  | { in: [string, unknown] };
+// The condition shape, operators, namespaces, state predicates and SLA format all come from the
+// shared domain module — the builder and the server validate against one definition.
+import {
+  COMPARISON_OPS,
+  CONDITION_NAMESPACES as NAMESPACES,
+  STATE_PREDICATES,
+  SLA_PATTERN,
+  SLA_HINT,
+  EVENT_TYPES,
+  type Condition,
+  type ComparisonOp,
+} from '@workspace/sdk';
+
+export { COMPARISON_OPS, NAMESPACES, STATE_PREDICATES, EVENT_TYPES };
+export type { Condition, ComparisonOp };
 
 export interface RuleDraft {
   ruleKey: string;
@@ -26,17 +26,7 @@ export interface RuleDraft {
     | { kind: 'cancel_tasks'; scope: string };
 }
 
-export const COMPARISON_OPS = ['eq', 'neq', 'gt', 'lt', 'gte', 'lte', 'in'] as const;
-export type ComparisonOp = (typeof COMPARISON_OPS)[number];
-
-export const NAMESPACES = ['event', 'payload', 'delta', 'state'] as const;
-
-/** The state predicates the API allowlists — the builder can only offer these. */
-export const STATE_PREDICATES = ['all_required_docs_verified', 'application_stage_rank'] as const;
-
 // ---- validation ------------------------------------------------------------------------------
-
-const SLA_RE = /^\d+[smhd]$/;
 
 export interface ValidationIssue {
   field: string;
@@ -59,8 +49,8 @@ export function validateDraft(draft: RuleDraft): ValidationIssue[] {
   if (draft.action.kind === 'create_task') {
     if (!draft.action.queue) issues.push({ field: 'action.queue', message: 'Queue is required' });
     if (!draft.action.template) issues.push({ field: 'action.template', message: 'Template is required' });
-    if (!SLA_RE.test(draft.action.sla)) {
-      issues.push({ field: 'action.sla', message: 'SLA must look like 4h, 30m, 2d or 90s' });
+    if (!SLA_PATTERN.test(draft.action.sla)) {
+      issues.push({ field: 'action.sla', message: SLA_HINT });
     }
   }
   return issues;

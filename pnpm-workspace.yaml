@@ -4,7 +4,9 @@ packages:
   - 'packages/web'
   - 'packages/sdk'
 
-# Allow esbuild (pulled in by tsx and vite) to run its install script so its native
-# binary is fetched during `pnpm install` in CI.
+# esbuild (pulled in by tsx and vite) must run its install script to fetch its native binary.
+allowBuilds:
+  esbuild: true
+
 onlyBuiltDependencies:
   - esbuild

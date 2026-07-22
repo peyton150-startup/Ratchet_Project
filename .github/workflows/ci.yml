@@ -3,8 +3,9 @@ name: CI
 on:
   push:
     branches: [main, master]
+  # Any PR, not just those targeting main — stacked PRs (built on another feature
+  # branch) must get CI too, or they merge unverified.
   pull_request:
-    branches: [main, master]
 
 jobs:
   test:

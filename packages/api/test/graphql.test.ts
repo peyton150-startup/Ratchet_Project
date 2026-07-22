@@ -112,6 +112,27 @@ test('assignTask routes a task to an eligible agent', async () => {
   assert.equal((res.data!['assignTask'] as { assignee: string }).assignee, agentId);
 });
 
+test('events query returns entity history for the task detail view', async () => {
+  const t = await seedTenant('gql-events');
+  await adminPool.query(
+    `INSERT INTO events (tenant_id, event_type, entity_type, entity_id, occurred_at, payload)
+     VALUES ($1, 'application.submitted', 'LoanApplication', 'app-hist', now() - interval '2 hours', '{}'),
+            ($1, 'application.updated',   'LoanApplication', 'app-hist', now() - interval '1 hour',  '{}'),
+            ($1, 'application.updated',   'LoanApplication', 'other-app', now(), '{}')`,
+    [t.tenantId],
+  );
+
+  const res = await exec(
+    'query($id: String!) { events(entityId: $id) { id type occurredAt } }',
+    { pool: appPool, tenantId: t.tenantId, role: 'operator' },
+    { id: 'app-hist' },
+  );
+  assert.equal(res.errors, undefined);
+  const events = res.data!['events'] as Array<{ type: string }>;
+  assert.equal(events.length, 2, 'only this entity history');
+  assert.equal(events[0]!.type, 'application.updated', 'newest first');
+});
+
 test('HTTP /graphql endpoint works end-to-end with auth', async () => {
   const t = await seedTenant('gql-http');
   await seedTask(t.tenantId);

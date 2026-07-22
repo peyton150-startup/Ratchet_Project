@@ -54,3 +54,4 @@ jobs:
       - run: pnpm --filter @workspace/api migrate
       - run: pnpm --filter @workspace/api test
       - run: pnpm --filter @workspace/sdk test
+      - run: pnpm --filter @workspace/web test

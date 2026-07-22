@@ -1,6 +1,7 @@
 import { GraphQLScalarType, GraphQLError, type GraphQLSchema } from 'graphql';
 import { makeExecutableSchema } from '@graphql-tools/schema';
 import { listTasks, getTask, listQueues } from '../tasks/read';
+import { listEventsForEntity } from '../events/read';
 import { TaskService } from '../tasks/service';
 import { IllegalTransitionError, type TaskAction } from '../tasks/stateMachine';
 import { RoutingService } from '../routing/assign';
@@ -32,10 +33,22 @@ const typeDefs = /* GraphQL */ `
     active: Boolean!
   }
 
+  type Event {
+    id: ID!
+    type: String!
+    entityType: String!
+    entityId: String!
+    occurredAt: DateTime!
+    delta: JSON!
+    payload: JSON!
+  }
+
   type Query {
     tasks(queue: String, state: String, limit: Int): [Task!]!
     task(id: ID!): Task
     queues: [Queue!]!
+    "Event history for one entity, newest first — powers the console task-detail view."
+    events(entityId: String!, limit: Int): [Event!]!
   }
 
   type Mutation {
@@ -101,6 +114,10 @@ const resolvers = {
     queues: (_p: unknown, _a: unknown, ctx: GraphQLContext) => {
       const tenantId = requirePermission(ctx, 'tasks:read');
       return listQueues(ctx.pool, tenantId);
+    },
+    events: (_p: unknown, args: { entityId: string; limit?: number }, ctx: GraphQLContext) => {
+      const tenantId = requirePermission(ctx, 'tasks:read');
+      return listEventsForEntity(ctx.pool, tenantId, args.entityId, args.limit ?? 50);
     },
   },
   Mutation: {

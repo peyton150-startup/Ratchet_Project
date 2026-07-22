@@ -2,6 +2,7 @@ import { Router } from 'express';
 import type { Pool } from 'pg';
 import { eventInputSchema } from './schema';
 import { ingestEvent, IdempotencyConflictError } from './ingest';
+import { metrics } from '../observability';
 
 export function eventsRouter(pool: Pool): Router {
   const router = Router();
@@ -16,6 +17,7 @@ export function eventsRouter(pool: Pool): Router {
     const tenantId = req.tenantId as string;
     try {
       const result = await ingestEvent(pool, tenantId, parsed.data);
+      metrics.eventsIngested.inc({ duplicate: String(result.duplicate) });
       res.status(result.duplicate ? 200 : 201).json(result);
     } catch (err) {
       if (err instanceof IdempotencyConflictError) {

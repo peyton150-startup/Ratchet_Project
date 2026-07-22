@@ -1,23 +1,25 @@
 // Runnable pipeline worker: relay the outbox to the stream, consume the stream into tasks
 // (auto-assigned), periodically reclaim crashed-consumer messages, and run scheduled sweeps.
-// Not exercised by CI (it's an infinite loop); the pieces it composes are tested individually.
+// The backoff policy is unit-tested in backoff.ts; the loop itself is not run by CI.
 import { ADMIN_DATABASE_URL, DATABASE_URL } from '../config';
 import { createPool } from '../db';
 import { createRedis } from '../redis';
 import { drainOutbox } from './relay';
-import { ensureGroup, consumeBatch, reclaimPending } from './consumer';
+import { ensureGroup, consumeBatch, reclaimPending, type ConsumeDeps } from './consumer';
 import { Scheduler } from './scheduler';
 import { RulesEngine } from '../rules/engine';
 import { TaskProcessor } from '../tasks/processor';
 import { RoutingService } from '../routing/assign';
 import { TaskPubSub } from '../pubsub';
 import { WebhookDispatcher } from '../webhooks/dispatcher';
+import { log, metrics } from '../observability';
+import { nextLoopState, IDLE_SLEEP_MS } from './backoff';
 
 const STREAM = process.env.RATCHET_STREAM ?? 'ratchet:events';
 const GROUP = process.env.RATCHET_GROUP ?? 'rules-workers';
 const CONSUMER = process.env.HOSTNAME ?? 'worker-1';
-const RECLAIM_EVERY_MS = 30_000;
-const SWEEP_EVERY_MS = 60_000;
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 async function main(): Promise<void> {
   const admin = createPool(ADMIN_DATABASE_URL);
@@ -29,33 +31,66 @@ async function main(): Promise<void> {
   const pubsub = new TaskPubSub(createRedis(process.env.REDIS_URL), process.env.REDIS_URL);
   const webhooks = new WebhookDispatcher(app);
   const scheduler = new Scheduler({ admin, engine, processor, routing });
-  const deps = { redis, appPool: app, engine, processor, routing, pubsub, webhooks };
+  const deps: ConsumeDeps = { redis, appPool: app, engine, processor, routing, pubsub, webhooks };
 
   await ensureGroup(redis, STREAM, GROUP);
-  console.log(`pipeline worker started (stream=${STREAM}, group=${GROUP}, consumer=${CONSUMER})`);
+  log.info('pipeline worker started', { stream: STREAM, group: GROUP, consumer: CONSUMER });
 
+  let running = true;
   let lastReclaim = 0;
   let lastSweep = 0;
-  for (;;) {
-    const relayed = await drainOutbox(admin, redis, { streamKey: STREAM });
-    const processed = await consumeBatch(deps, { streamKey: STREAM, group: GROUP, consumer: CONSUMER });
+  let failures = 0;
 
-    const now = Date.now();
-    if (now - lastReclaim > RECLAIM_EVERY_MS) {
-      await reclaimPending(deps, { streamKey: STREAM, group: GROUP, consumer: CONSUMER });
-      lastReclaim = now;
+  const shutdown = async (signal: string): Promise<void> => {
+    if (!running) return;
+    running = false;
+    log.info('worker shutting down', { signal });
+    try {
+      redis.disconnect();
+      await Promise.all([app.end(), admin.end()]);
+    } catch (err) {
+      log.error('error during worker shutdown', { error: String(err) });
     }
-    if (now - lastSweep > SWEEP_EVERY_MS) {
-      await scheduler.runAll(new Date());
-      lastSweep = now;
+    process.exit(0);
+  };
+  process.on('SIGTERM', () => void shutdown('SIGTERM'));
+  process.on('SIGINT', () => void shutdown('SIGINT'));
+
+  while (running) {
+    let outcome: { ok: boolean; didWork: boolean };
+    try {
+      const relayed = await drainOutbox(admin, redis, { streamKey: STREAM });
+      const processed = await consumeBatch(deps, { streamKey: STREAM, group: GROUP, consumer: CONSUMER });
+      if (processed > 0) metrics.pipelineMessages.inc({}, processed);
+
+      const now = Date.now();
+      if (now - lastReclaim > 30_000) {
+        await reclaimPending(deps, { streamKey: STREAM, group: GROUP, consumer: CONSUMER });
+        lastReclaim = now;
+      }
+      if (now - lastSweep > 60_000) {
+        await scheduler.runAll(new Date());
+        lastSweep = now;
+      }
+      outcome = { ok: true, didWork: relayed > 0 || processed > 0 };
+    } catch (err) {
+      // A transient Postgres/Redis failure must not kill the worker: without this the entire
+      // pipeline stops silently on one blip. Back off exponentially and keep going.
+      metrics.pipelineErrors.inc({});
+      log.error('worker iteration failed; backing off', {
+        error: err instanceof Error ? err.message : String(err),
+        consecutiveFailures: failures + 1,
+      });
+      outcome = { ok: false, didWork: false };
     }
-    if (relayed === 0 && processed === 0) {
-      await new Promise((r) => setTimeout(r, 500));
-    }
+
+    const state = nextLoopState(failures, outcome);
+    failures = state.consecutiveFailures;
+    if (state.backoffMs > 0) await sleep(state.backoffMs);
   }
 }
 
 main().catch((err) => {
-  console.error(err);
+  log.error('worker failed to start', { error: err instanceof Error ? err.message : String(err) });
   process.exit(1);
 });

@@ -2,6 +2,8 @@ import type { Pool, PoolClient } from 'pg';
 import { withTenant } from '../db';
 import { processWithRetry, type RetryPolicy, type Sleep } from '../tasks/processor';
 import { signBody, SIGNATURE_HEADER } from './signing';
+import { checkWebhookUrl, type Resolver } from './urlGuard';
+import { metrics } from '../observability';
 
 export interface WebhookRow {
   id: string;
@@ -41,6 +43,8 @@ export class WebhookDispatcher {
     private readonly policy: RetryPolicy = { maxAttempts: 3, baseDelayMs: 100 },
     private readonly sender: Sender = defaultSender,
     private readonly sleep?: Sleep,
+    // Injectable so tests can exercise delivery without real DNS.
+    private readonly resolver?: Resolver,
   ) {}
 
   async dispatch(tenantId: string, eventType: string, payload: unknown): Promise<number> {
@@ -49,6 +53,19 @@ export class WebhookDispatcher {
       const body = JSON.stringify({ type: eventType, data: payload });
 
       for (const wh of webhooks) {
+        // Re-check at delivery time: DNS can be re-pointed after registration (DNS rebinding).
+        const check = await checkWebhookUrl(wh.url, this.resolver);
+        if (!check.ok) {
+          metrics.webhookDeliveries.inc({ status: 'blocked' });
+          await client.query(
+            `INSERT INTO webhook_deliveries
+               (tenant_id, webhook_id, event_type, payload, status, attempts, response_status)
+             VALUES ($1, $2, $3, $4, 'failed', 0, NULL)`,
+            [tenantId, wh.id, eventType, body],
+          );
+          continue;
+        }
+
         let lastStatus = 0;
         const outcome = await processWithRetry(
           this.policy,
@@ -71,6 +88,7 @@ export class WebhookDispatcher {
           this.sleep,
         );
 
+        metrics.webhookDeliveries.inc({ status: outcome.status === 'ok' ? 'delivered' : 'failed' });
         await client.query(
           `INSERT INTO webhook_deliveries
              (tenant_id, webhook_id, event_type, payload, status, attempts, response_status)

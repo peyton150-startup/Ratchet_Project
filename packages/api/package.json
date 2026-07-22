@@ -9,8 +9,10 @@
     "dev": "tsx watch src/index.ts",
     "migrate": "tsx scripts/migrate.ts",
     "worker": "tsx src/pipeline/worker.ts",
-    "test": "node --import tsx --test test/ingest.test.ts test/rls.test.ts test/rules.test.ts test/tasks.test.ts test/pipeline.test.ts test/routing.test.ts test/rbac.test.ts test/graphql.test.ts test/subscriptions.test.ts test/webhooks.test.ts test/cache.test.ts",
-    "lint": "eslint src --ext .ts"
+    "test": "node --import tsx --test test/ingest.test.ts test/rls.test.ts test/rules.test.ts test/tasks.test.ts test/pipeline.test.ts test/routing.test.ts test/rbac.test.ts test/graphql.test.ts test/subscriptions.test.ts test/webhooks.test.ts test/cache.test.ts test/ops.test.ts",
+    "lint": "eslint src --ext .ts",
+    "issue-key": "tsx scripts/issueKey.ts",
+    "seed": "tsx scripts/seedDemo.ts"
   },
   "keywords": [],
   "author": "",

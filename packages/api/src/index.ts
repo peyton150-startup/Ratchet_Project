@@ -9,6 +9,7 @@ import { authenticateKey } from './auth';
 import { TaskPubSub } from './pubsub';
 import { schema } from './graphql/schema';
 import { RulesEngine } from './rules/engine';
+import { log } from './observability';
 
 const pool = createPool(DATABASE_URL);
 const pubsub = new TaskPubSub(createRedis(process.env.REDIS_URL), process.env.REDIS_URL);
@@ -34,5 +35,37 @@ useServer(
 );
 
 httpServer.listen(PORT, () => {
-  console.log(`Server running on http://localhost:${PORT} (GraphQL + WS subscriptions at /graphql)`);
+  log.info('server started', { port: PORT, endpoints: ['/graphql', '/events', '/webhooks', '/metrics'] });
 });
+
+/**
+ * Graceful shutdown: stop accepting connections, let in-flight requests finish, then close the
+ * pool and Redis. Without this, a rolling deploy cuts live requests and leaks connections.
+ */
+let shuttingDown = false;
+async function shutdown(signal: string): Promise<void> {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  log.info('server shutting down', { signal });
+
+  // Force-exit if a hung connection prevents a clean close.
+  const forceExit = setTimeout(() => {
+    log.error('shutdown timed out; forcing exit');
+    process.exit(1);
+  }, 10_000);
+  forceExit.unref();
+
+  try {
+    wsServer.clients.forEach((client) => client.close(1001, 'server shutting down'));
+    await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+    await pool.end();
+    log.info('shutdown complete');
+    process.exit(0);
+  } catch (err) {
+    log.error('error during shutdown', { error: err instanceof Error ? err.message : String(err) });
+    process.exit(1);
+  }
+}
+
+process.on('SIGTERM', () => void shutdown('SIGTERM'));
+process.on('SIGINT', () => void shutdown('SIGINT'));

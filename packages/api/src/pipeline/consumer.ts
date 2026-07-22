@@ -7,6 +7,7 @@ import { insertDeadLetter } from '../tasks/service';
 import { getTask } from '../tasks/read';
 import type { RoutingService } from '../routing/assign';
 import type { TaskPubSub } from '../pubsub';
+import type { WebhookDispatcher } from '../webhooks/dispatcher';
 
 export interface ConsumeDeps {
   redis: Redis;
@@ -15,6 +16,7 @@ export interface ConsumeDeps {
   processor: TaskProcessor;
   routing?: RoutingService; // optional: when set, newly created tasks are auto-assigned
   pubsub?: TaskPubSub; // optional: when set, created/assigned tasks are published for live updates
+  webhooks?: WebhookDispatcher; // optional: when set, task.created is dispatched to integrators
 }
 
 export interface ConsumeOptions {
@@ -109,9 +111,12 @@ async function handleEntry(
           // Best-effort: an unassignable task (no queue/agent) stays unassigned, not failed.
           await deps.routing.assign(msg.tenantId, taskId).catch(() => {});
         }
-        if (deps.pubsub) {
+        if (deps.pubsub || deps.webhooks) {
           const task = await getTask(deps.appPool, msg.tenantId, taskId);
-          if (task) await deps.pubsub.publish(msg.tenantId, task);
+          if (task) {
+            if (deps.pubsub) await deps.pubsub.publish(msg.tenantId, task);
+            if (deps.webhooks) await deps.webhooks.dispatch(msg.tenantId, 'task.created', task).catch(() => {});
+          }
         }
       }
     }

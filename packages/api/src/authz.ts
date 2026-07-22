@@ -9,12 +9,21 @@ export type Permission =
   | 'tasks:work' // claim/complete/block/assign tasks
   | 'rules:read' // view rules
   | 'rules:write' // create/version/edit rules, dry-run
-  | 'queues:manage'; // manage agents, queues, membership
+  | 'queues:manage' // manage agents, queues, membership
+  | 'webhooks:manage'; // register/list webhook endpoints
 
 const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
-  integrator: ['events:ingest'],
+  integrator: ['events:ingest', 'webhooks:manage'],
   operator: ['tasks:read', 'tasks:work', 'rules:read'],
-  admin: ['events:ingest', 'tasks:read', 'tasks:work', 'rules:read', 'rules:write', 'queues:manage'],
+  admin: [
+    'events:ingest',
+    'tasks:read',
+    'tasks:work',
+    'rules:read',
+    'rules:write',
+    'queues:manage',
+    'webhooks:manage',
+  ],
 };
 
 export function isRole(value: unknown): value is Role {

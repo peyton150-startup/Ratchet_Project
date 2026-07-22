@@ -5,6 +5,7 @@ import { createHandler } from 'graphql-http/lib/use/express';
 import { authMiddleware } from './auth';
 import { requirePermission } from './authz';
 import { eventsRouter } from './events/route';
+import { webhooksRouter } from './webhooks/route';
 import { schema } from './graphql/schema';
 import type { TaskPubSub } from './pubsub';
 
@@ -28,6 +29,9 @@ export function buildApp(pool: Pool, pubsub?: TaskPubSub): Express {
 
   // Event ingest: auth resolves tenant + role, RBAC requires events:ingest, then the router runs.
   app.use('/events', authMiddleware(pool), requirePermission('events:ingest'), eventsRouter(pool));
+
+  // Webhook management for integrators (REST), guarded by webhooks:manage.
+  app.use('/webhooks', authMiddleware(pool), requirePermission('webhooks:manage'), webhooksRouter(pool));
 
   // GraphQL console API (ADR-003): auth resolves tenant + role into the GraphQL context; per-field
   // RBAC is enforced in the resolvers. Subscriptions are a following slice.

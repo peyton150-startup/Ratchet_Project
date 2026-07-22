@@ -10,6 +10,7 @@ import { Scheduler } from './scheduler';
 import { RulesEngine } from '../rules/engine';
 import { TaskProcessor } from '../tasks/processor';
 import { RoutingService } from '../routing/assign';
+import { TaskPubSub } from '../pubsub';
 
 const STREAM = process.env.RATCHET_STREAM ?? 'ratchet:events';
 const GROUP = process.env.RATCHET_GROUP ?? 'rules-workers';
@@ -24,8 +25,9 @@ async function main(): Promise<void> {
   const engine = new RulesEngine(app);
   const processor = new TaskProcessor(app);
   const routing = new RoutingService(app);
+  const pubsub = new TaskPubSub(createRedis(process.env.REDIS_URL), process.env.REDIS_URL);
   const scheduler = new Scheduler({ admin, engine, processor, routing });
-  const deps = { redis, appPool: app, engine, processor, routing };
+  const deps = { redis, appPool: app, engine, processor, routing, pubsub };
 
   await ensureGroup(redis, STREAM, GROUP);
   console.log(`pipeline worker started (stream=${STREAM}, group=${GROUP}, consumer=${CONSUMER})`);

@@ -44,6 +44,11 @@ const typeDefs = /* GraphQL */ `
     blockTask(id: ID!): Task!
     assignTask(id: ID!): Task!
   }
+
+  type Subscription {
+    "Live task changes for the tenant, optionally filtered to one queue."
+    queueUpdated(queue: String): Task!
+  }
 `;
 
 const dateTime = new GraphQLScalarType({
@@ -76,7 +81,9 @@ async function transitionMutation(
     }
     throw err;
   }
-  return getTask(ctx.pool, tenantId, id);
+  const task = await getTask(ctx.pool, tenantId, id);
+  if (ctx.pubsub && task) await ctx.pubsub.publish(tenantId, task);
+  return task;
 }
 
 const resolvers = {
@@ -108,7 +115,21 @@ const resolvers = {
           extensions: { code: 'NOT_ASSIGNED', reason: res.reason },
         });
       }
-      return getTask(ctx.pool, tenantId, args.id);
+      const task = await getTask(ctx.pool, tenantId, args.id);
+      if (ctx.pubsub && task) await ctx.pubsub.publish(tenantId, task);
+      return task;
+    },
+  },
+  Subscription: {
+    queueUpdated: {
+      subscribe: (_p: unknown, args: { queue?: string }, ctx: GraphQLContext) => {
+        const tenantId = requirePermission(ctx, 'tasks:read');
+        if (!ctx.pubsub) {
+          throw new GraphQLError('subscriptions unavailable', { extensions: { code: 'UNAVAILABLE' } });
+        }
+        return ctx.pubsub.subscribe(tenantId, args.queue ?? undefined);
+      },
+      resolve: (payload: unknown) => payload,
     },
   },
 };

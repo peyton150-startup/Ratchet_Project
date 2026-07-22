@@ -8,9 +8,10 @@ import { eventsRouter } from './events/route';
 import { webhooksRouter } from './webhooks/route';
 import { schema } from './graphql/schema';
 import type { TaskPubSub } from './pubsub';
+import type { RulesEngine } from './rules/engine';
 
 /** Build the Express app around a given pool. Kept separate from listen() so tests can drive it. */
-export function buildApp(pool: Pool, pubsub?: TaskPubSub): Express {
+export function buildApp(pool: Pool, pubsub?: TaskPubSub, engine?: RulesEngine): Express {
   const app = express();
   app.use(express.json());
 
@@ -42,7 +43,7 @@ export function buildApp(pool: Pool, pubsub?: TaskPubSub): Express {
       schema,
       context: (req) => {
         const raw = req.raw as { tenantId?: string; role?: string };
-        return { pool, tenantId: raw.tenantId, role: raw.role, pubsub };
+        return { pool, tenantId: raw.tenantId, role: raw.role, pubsub, engine };
       },
     }),
   );

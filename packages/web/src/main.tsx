@@ -2,6 +2,7 @@ import { StrictMode, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { ConsoleApi } from './lib/api';
 import { OperatorConsole } from './operator/OperatorConsole';
+import { AdminConsole } from './admin/AdminConsole';
 import { Button, Card, PageShell, tokens } from './components';
 
 const STORAGE_KEY = 'ratchet.apiKey';
@@ -47,7 +48,35 @@ function App() {
     );
   }
 
-  return <OperatorConsole api={new ConsoleApi({ apiKey })} />;
+  return <ConsoleSwitcher apiKey={apiKey} />;
+}
+
+/** Both consoles share one API instance (and therefore one WebSocket) and the component library. */
+function ConsoleSwitcher({ apiKey }: { apiKey: string }) {
+  const [view, setView] = useState<'operator' | 'admin'>('operator');
+  const [api] = useState(() => new ConsoleApi({ apiKey }));
+
+  return (
+    <div>
+      <div
+        style={{
+          display: 'flex',
+          gap: tokens.space(2),
+          padding: tokens.space(3),
+          background: tokens.color.bg,
+          borderBottom: `1px solid ${tokens.color.border}`,
+        }}
+      >
+        <Button tone={view === 'operator' ? 'accent' : 'neutral'} onClick={() => setView('operator')}>
+          Operator
+        </Button>
+        <Button tone={view === 'admin' ? 'accent' : 'neutral'} onClick={() => setView('admin')}>
+          Admin
+        </Button>
+      </div>
+      {view === 'operator' ? <OperatorConsole api={api} /> : <AdminConsole api={api} />}
+    </div>
+  );
 }
 
 createRoot(document.getElementById('root')!).render(

@@ -157,4 +157,42 @@ export class RulesEngine {
   runSchedule(tenantId: string, now: Date, opts: EvaluateOptions = {}): Promise<Decision[]> {
     return withTenant(this.pool, tenantId, (c) => this.runScheduleWithClient(c, tenantId, now, opts));
   }
+
+  /**
+   * Evaluate a single candidate rule against a sample event without persisting anything. This backs
+   * the admin console's dry-run preview, where the rule being tested is a *draft* that may not be
+   * stored yet — so it deliberately does not read stored rules or the cache.
+   *
+   * State predicates still run against real current state, which is the point: an author needs to
+   * see whether R7-style cross-entity conditions would actually hold.
+   */
+  async dryRunRule(
+    tenantId: string,
+    rule: Rule,
+    event: EngineEvent,
+  ): Promise<{ matched: boolean; decision: Decision | null }> {
+    return withTenant(this.pool, tenantId, async (client) => {
+      const ctx: EvalContext = {
+        event: {
+          type: event.type,
+          entityId: event.entityId,
+          entityType: event.entityType,
+          occurredAt: event.occurredAt,
+        },
+        payload: event.payload,
+        delta: event.delta,
+        state: new PgStateProvider(client),
+      };
+      const matched =
+        rule.condition === null ? true : await evaluateCondition(rule.condition, ctx);
+
+      const applicationId =
+        (event.payload['applicationId'] as string | undefined) ??
+        (event.type.startsWith('application.') ? event.entityId : undefined);
+      const subject: Record<string, unknown> = { entityId: event.entityId };
+      if (applicationId !== undefined) subject['applicationId'] = applicationId;
+
+      return { matched, decision: matched ? buildDecision(rule, subject) : null };
+    });
+  }
 }

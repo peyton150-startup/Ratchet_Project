@@ -3,6 +3,10 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { signBody, verifySignature, SIGNATURE_HEADER } from '../src/webhooks/signing';
 import { WebhookDispatcher, type Sender } from '../src/webhooks/dispatcher';
+import type { Resolver } from '../src/webhooks/urlGuard';
+
+// The SSRF guard resolves webhook hostnames; stub it so tests need no real DNS.
+const publicResolver: Resolver = async () => [{ address: '93.184.216.34', family: 4 }];
 import { buildApp } from '../src/app';
 import {
   adminPool,
@@ -16,7 +20,7 @@ import {
 let server: RunningServer;
 
 before(async () => {
-  server = await startServer(buildApp(appPool));
+  server = await startServer(buildApp(appPool, undefined, undefined, { webhookResolver: publicResolver }));
 });
 
 after(async () => {
@@ -61,7 +65,7 @@ test('dispatch delivers a valid signature to matching webhooks', async () => {
   const t = await seedTenant('wh-deliver');
   await seedWebhook(t.tenantId, 'https://example.test/hook', ['task.created'], 'topsecret');
   const { sender, calls } = capturingSender(200);
-  const dispatcher = new WebhookDispatcher(appPool, { maxAttempts: 3, baseDelayMs: 0 }, sender);
+  const dispatcher = new WebhookDispatcher(appPool, { maxAttempts: 3, baseDelayMs: 0 }, sender, undefined, publicResolver);
 
   const n = await dispatcher.dispatch(t.tenantId, 'task.created', { id: 'task-1' });
   assert.equal(n, 1);
@@ -81,7 +85,7 @@ test('dispatch only fires webhooks subscribed to the event type', async () => {
   const t = await seedTenant('wh-filter');
   await seedWebhook(t.tenantId, 'https://example.test/hook', ['task.updated']); // not task.created
   const { sender, calls } = capturingSender(200);
-  const dispatcher = new WebhookDispatcher(appPool, { maxAttempts: 3, baseDelayMs: 0 }, sender);
+  const dispatcher = new WebhookDispatcher(appPool, { maxAttempts: 3, baseDelayMs: 0 }, sender, undefined, publicResolver);
 
   const n = await dispatcher.dispatch(t.tenantId, 'task.created', { id: 'x' });
   assert.equal(n, 0);
@@ -92,7 +96,7 @@ test('dispatch retries then records failure for a failing endpoint', async () =>
   const t = await seedTenant('wh-fail');
   await seedWebhook(t.tenantId, 'https://example.test/down', ['task.created']);
   const { sender, calls } = capturingSender(500);
-  const dispatcher = new WebhookDispatcher(appPool, { maxAttempts: 3, baseDelayMs: 0 }, sender, async () => {});
+  const dispatcher = new WebhookDispatcher(appPool, { maxAttempts: 3, baseDelayMs: 0 }, sender, async () => {}, publicResolver);
 
   await dispatcher.dispatch(t.tenantId, 'task.created', { id: 'x' });
   assert.equal(calls.length, 3, 'retried maxAttempts times');
@@ -110,7 +114,7 @@ test('dispatch is tenant-isolated', async () => {
   const b = await seedTenant('wh-b');
   await seedWebhook(a.tenantId, 'https://example.test/a', ['task.created']);
   const { sender, calls } = capturingSender(200);
-  const dispatcher = new WebhookDispatcher(appPool, { maxAttempts: 1, baseDelayMs: 0 }, sender);
+  const dispatcher = new WebhookDispatcher(appPool, { maxAttempts: 1, baseDelayMs: 0 }, sender, undefined, publicResolver);
 
   const n = await dispatcher.dispatch(b.tenantId, 'task.created', { id: 'x' });
   assert.equal(n, 0, 'tenant B sees none of tenant A webhooks');

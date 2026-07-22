@@ -12,6 +12,7 @@ import { getTaskTx, type TaskView } from '../tasks/read';
 import { assignTask, type RoutingService } from '../routing/assign';
 import type { TaskPubSub } from '../pubsub';
 import type { WebhookDispatcher } from '../webhooks/dispatcher';
+import { metrics } from '../observability';
 
 export interface ConsumeDeps {
   redis: Redis;
@@ -110,6 +111,7 @@ async function processMessageTx(deps: ConsumeDeps, msg: StreamMessage): Promise<
       }
       const result = await createTaskFromDecision(client, msg.tenantId, msg.eventId, decision);
       if (!result.created) continue; // duplicate: an earlier delivery already handled it
+      metrics.tasksCreated.inc({ queue: decision.action.queue });
       if (deps.routing) await assignTask(client, result.taskId);
       if (deps.pubsub || deps.webhooks) {
         const task = await getTaskTx(client, result.taskId);

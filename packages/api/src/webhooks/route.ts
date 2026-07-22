@@ -3,6 +3,7 @@ import { Router } from 'express';
 import type { Pool } from 'pg';
 import { z } from 'zod';
 import { withTenant } from '../db';
+import { checkWebhookUrl, type Resolver } from './urlGuard';
 
 const registerSchema = z
   .object({
@@ -12,7 +13,7 @@ const registerSchema = z
   .strict();
 
 /** REST management for integrator webhooks. Guarded by webhooks:manage upstream. */
-export function webhooksRouter(pool: Pool): Router {
+export function webhooksRouter(pool: Pool, resolver?: Resolver): Router {
   const router = Router();
 
   // Register a webhook. The signing secret is returned once, here, and never again.
@@ -23,6 +24,15 @@ export function webhooksRouter(pool: Pool): Router {
       return;
     }
     const tenantId = req.tenantId as string;
+
+    // SSRF guard: refuse URLs that resolve to private/loopback/link-local addresses, so a tenant
+    // cannot use our server to reach cloud metadata or internal services.
+    const check = await checkWebhookUrl(parsed.data.url, resolver);
+    if (!check.ok) {
+      res.status(400).json({ error: 'webhook URL rejected', reason: check.reason });
+      return;
+    }
+
     const secret = randomBytes(24).toString('hex');
     try {
       const created = await withTenant(pool, tenantId, (c) =>

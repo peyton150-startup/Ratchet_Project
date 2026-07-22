@@ -1,18 +1,24 @@
 {
   "name": "@workspace/sdk",
   "version": "0.0.1",
-  "description": "Shared SDK",
+  "description": "Ratchet TypeScript SDK",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
+    "test": "node --import tsx --test test/sdk.test.ts",
     "lint": "eslint src --ext .ts"
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "devDependencies": {
+    "@types/node": "^20.10.6",
+    "tsx": "^4.7.0",
     "typescript": "^5.3.3"
   }
 }

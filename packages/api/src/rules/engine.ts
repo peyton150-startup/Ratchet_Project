@@ -62,10 +62,18 @@ export class RulesEngine {
         state: provider,
       };
 
+      // Carry applicationId on the subject so downstream cancels (R12) can find an application's
+      // tasks even when the triggering event's entity is a document/verification/etc.
+      const applicationId =
+        (event.payload['applicationId'] as string | undefined) ??
+        (event.type.startsWith('application.') ? event.entityId : undefined);
+
       const decisions: Decision[] = [];
       for (const rule of rules) {
         const matched = rule.condition === null ? true : await evaluateCondition(rule.condition, ctx);
-        const decision = matched ? buildDecision(rule, { entityId: event.entityId }) : null;
+        const subject: Record<string, unknown> = { entityId: event.entityId };
+        if (applicationId !== undefined) subject['applicationId'] = applicationId;
+        const decision = matched ? buildDecision(rule, subject) : null;
         if (!dryRun) {
           await insertAudit(client, tenantId, {
             ruleKey: rule.ruleKey,

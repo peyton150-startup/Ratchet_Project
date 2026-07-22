@@ -118,10 +118,37 @@ test('poison message is retried and dead-lettered', async () => {
   assert.equal(dl.rows[0]!.c, 1);
   assert.equal(dl.rows[0]!.attempts, 3);
 
-  // Sanity: the processor's real path also dead-letters an invalid decision without duplicating tasks.
-  const bad = { ...createDecision(), action: { kind: 'cancel_tasks', scope: 'x' } } as unknown as Decision;
+  // Sanity: the processor's real path dead-letters a malformed decision (invalid SLA duration).
+  const bad = createDecision({ sla: 'not-a-duration' });
   const res = await processor.processDecision(t.tenantId, randomUUID(), bad, noopSleep);
   assert.equal(res.status, 'dead_lettered');
+});
+
+// R12: a cancel_tasks decision cancels all of an application's non-terminal tasks.
+test('processor cancels an application tasks on a cancel_tasks decision', async () => {
+  const t = await seedTenant('tasks-r12');
+  const proc = new TaskProcessor(appPool, { maxAttempts: 3, baseDelayMs: 0 });
+  const forApp: Decision['subject'] = { entityId: 'app-9', applicationId: 'app-9' };
+
+  await proc.processDecision(t.tenantId, randomUUID(), { ...createDecision(), subject: forApp });
+  await proc.processDecision(t.tenantId, randomUUID(), { ...createDecision(), subject: forApp });
+
+  const cancel: Decision = {
+    ruleKey: 'R12',
+    ruleVersion: 1,
+    action: { kind: 'cancel_tasks', scope: 'application' },
+    subject: forApp,
+  };
+  const res = await proc.processDecision(t.tenantId, randomUUID(), cancel);
+  assert.equal(res.status, 'ok');
+  assert.ok(res.result && res.result.kind === 'cancelled');
+  assert.equal((res.result as { taskIds: string[] }).taskIds.length, 2);
+
+  const cancelled = await adminPool.query<{ c: number }>(
+    "SELECT count(*)::int AS c FROM tasks WHERE tenant_id = $1 AND state = 'cancelled'",
+    [t.tenantId],
+  );
+  assert.equal(cancelled.rows[0]!.c, 2);
 });
 
 // SLA due date is computed from the SLA string; breached tasks are found; priority is stored.

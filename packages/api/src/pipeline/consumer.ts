@@ -4,12 +4,14 @@ import type { Redis } from '../redis';
 import { RulesEngine, type EngineEvent } from '../rules/engine';
 import { TaskProcessor } from '../tasks/processor';
 import { insertDeadLetter } from '../tasks/service';
+import type { RoutingService } from '../routing/assign';
 
 export interface ConsumeDeps {
   redis: Redis;
   appPool: Pool;
   engine: RulesEngine;
   processor: TaskProcessor;
+  routing?: RoutingService; // optional: when set, newly created tasks are auto-assigned
 }
 
 export interface ConsumeOptions {
@@ -17,6 +19,10 @@ export interface ConsumeOptions {
   group: string;
   consumer: string;
   count?: number;
+}
+
+export interface ReclaimOptions extends ConsumeOptions {
+  minIdleMs?: number; // only reclaim messages idle at least this long (default 60s)
 }
 
 interface StreamMessage {
@@ -41,11 +47,7 @@ function fieldsToRecord(fields: string[]): Record<string, string> {
   return out;
 }
 
-async function loadEvent(
-  pool: Pool,
-  tenantId: string,
-  eventId: string,
-): Promise<EngineEvent | null> {
+async function loadEvent(pool: Pool, tenantId: string, eventId: string): Promise<EngineEvent | null> {
   return withTenant(pool, tenantId, async (c) => {
     const r = await c.query<{
       id: string;
@@ -75,14 +77,58 @@ async function loadEvent(
 }
 
 /**
- * The pipeline consumer: read events off the stream, run the rules engine, and turn each decision
- * into a task via the processor (which is exactly-once and DLQs poison task creation). A message
- * whose event is missing or whose processing throws is dead-lettered and acked, so it is not retried
- * forever. Returns the number of messages processed.
+ * Handle one stream entry: run the rules engine, turn each decision into a task (or a cancel) via
+ * the processor, optionally auto-assign newly created tasks, then ACK. Missing events / failures are
+ * dead-lettered and acked so nothing loops forever. Shared by live consumption and PEL reclaim.
  */
+async function handleEntry(
+  deps: ConsumeDeps,
+  opts: ConsumeOptions,
+  id: string,
+  fields: string[] | null,
+): Promise<void> {
+  if (fields === null) {
+    // Entry was deleted from the stream; just drop it from the PEL.
+    await deps.redis.xack(opts.streamKey, opts.group, id);
+    return;
+  }
+  const rec = fieldsToRecord(fields);
+  const msg: StreamMessage = { tenantId: rec['tenantId'] ?? '', eventId: rec['eventId'] ?? '' };
+  try {
+    const event = await loadEvent(deps.appPool, msg.tenantId, msg.eventId);
+    if (!event) throw new Error(`event not found: ${msg.eventId}`);
+    const decisions = await deps.engine.evaluateEvent(msg.tenantId, event);
+    for (const decision of decisions) {
+      const outcome = await deps.processor.processDecision(msg.tenantId, msg.eventId, decision);
+      if (
+        deps.routing &&
+        outcome.status === 'ok' &&
+        outcome.result?.kind === 'created' &&
+        outcome.result.task.created
+      ) {
+        // Best-effort: an unassignable task (no queue/agent) stays unassigned, not failed.
+        await deps.routing.assign(msg.tenantId, outcome.result.task.taskId).catch(() => {});
+      }
+    }
+  } catch (err) {
+    await withTenant(deps.appPool, msg.tenantId, (c) =>
+      insertDeadLetter(c, msg.tenantId, {
+        source: 'pipeline',
+        reference: msg.eventId,
+        payload: msg,
+        error: err instanceof Error ? err.message : String(err),
+        attempts: 1,
+      }),
+    ).catch(() => {
+      /* unknown tenant can't be DLQ'd under RLS; ack anyway to avoid a poison loop */
+    });
+  }
+  await deps.redis.xack(opts.streamKey, opts.group, id);
+}
+
+/** Read and process new messages for this consumer. Returns the number processed. */
 export async function consumeBatch(deps: ConsumeDeps, opts: ConsumeOptions): Promise<number> {
-  const { redis, appPool, engine, processor } = deps;
-  const res = (await redis.xreadgroup(
+  const res = (await deps.redis.xreadgroup(
     'GROUP',
     opts.group,
     opts.consumer,
@@ -95,33 +141,31 @@ export async function consumeBatch(deps: ConsumeDeps, opts: ConsumeOptions): Pro
 
   if (!res || res.length === 0) return 0;
   const entries = res[0]![1];
-
-  let processed = 0;
   for (const [id, fields] of entries) {
-    const rec = fieldsToRecord(fields);
-    const msg: StreamMessage = { tenantId: rec['tenantId'] ?? '', eventId: rec['eventId'] ?? '' };
-    try {
-      const event = await loadEvent(appPool, msg.tenantId, msg.eventId);
-      if (!event) throw new Error(`event not found: ${msg.eventId}`);
-      const decisions = await engine.evaluateEvent(msg.tenantId, event);
-      for (const decision of decisions) {
-        await processor.processDecision(msg.tenantId, msg.eventId, decision);
-      }
-    } catch (err) {
-      await withTenant(appPool, msg.tenantId, (c) =>
-        insertDeadLetter(c, msg.tenantId, {
-          source: 'pipeline',
-          reference: msg.eventId,
-          payload: msg,
-          error: err instanceof Error ? err.message : String(err),
-          attempts: 1,
-        }),
-      ).catch(() => {
-        /* if the tenant is unknown we cannot DLQ under RLS; ack anyway to avoid a poison loop */
-      });
-    }
-    await redis.xack(opts.streamKey, opts.group, id);
-    processed += 1;
+    await handleEntry(deps, opts, id, fields);
   }
-  return processed;
+  return entries.length;
+}
+
+/**
+ * Reclaim and process messages left pending by a crashed consumer (Redis PEL). Uses XAUTOCLAIM to
+ * take ownership of entries idle beyond minIdleMs, then runs them through the same handler. This is
+ * what makes at-least-once hold across a consumer crash between read and ack.
+ */
+export async function reclaimPending(deps: ConsumeDeps, opts: ReclaimOptions): Promise<number> {
+  const res = (await deps.redis.xautoclaim(
+    opts.streamKey,
+    opts.group,
+    opts.consumer,
+    opts.minIdleMs ?? 60_000,
+    '0',
+    'COUNT',
+    opts.count ?? 10,
+  )) as [string, Array<[string, string[] | null]>, string[]?];
+
+  const entries = res[1] ?? [];
+  for (const [id, fields] of entries) {
+    await handleEntry(deps, opts, id, fields);
+  }
+  return entries.length;
 }

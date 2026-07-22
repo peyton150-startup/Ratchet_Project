@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import type { Pool } from 'pg';
 import { eventInputSchema } from './schema';
-import { ingestEvent } from './ingest';
+import { ingestEvent, IdempotencyConflictError } from './ingest';
 
 export function eventsRouter(pool: Pool): Router {
   const router = Router();
@@ -18,6 +18,10 @@ export function eventsRouter(pool: Pool): Router {
       const result = await ingestEvent(pool, tenantId, parsed.data);
       res.status(result.duplicate ? 200 : 201).json(result);
     } catch (err) {
+      if (err instanceof IdempotencyConflictError) {
+        res.status(409).json({ error: 'idempotency key reused with a different payload' });
+        return;
+      }
       next(err);
     }
   });

@@ -2,7 +2,7 @@
   "name": "ratchet",
   "version": "0.0.1",
   "private": true,
-  "description": "Ratchet — multi-tenant task orchestration platform",
+  "description": "Ratchet \u2014 multi-tenant task orchestration platform",
   "scripts": {
     "build": "pnpm -r build",
     "typecheck": "pnpm -r exec tsc --noEmit",

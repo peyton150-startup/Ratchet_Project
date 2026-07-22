@@ -1,25 +1,9 @@
 import type { Task } from '@workspace/sdk';
 
-export type TaskAction = 'claim' | 'complete' | 'block' | 'unblock' | 'release' | 'cancel';
-
-// Mirrors the API's state machine (packages/api/src/tasks/stateMachine.ts). The console uses this
-// to show only the actions the server will actually accept, so operators never hit a 403/illegal
-// transition by clicking a button that was never valid.
-const ALLOWED: Record<string, TaskAction[]> = {
-  open: ['claim', 'cancel'],
-  claimed: ['complete', 'block', 'release', 'cancel'],
-  blocked: ['unblock', 'cancel'],
-  completed: [],
-  cancelled: [],
-};
-
-export function allowedActions(state: string): TaskAction[] {
-  return ALLOWED[state] ?? [];
-}
-
-export function isTerminal(state: string): boolean {
-  return state === 'completed' || state === 'cancelled';
-}
+// Task states, legal transitions and terminal states come from the shared domain module, so the
+// console cannot offer an action the server would reject — previously this table was a hand-kept
+// copy of the API's state machine, guarded only by a test.
+export { allowedActions, isTerminalState as isTerminal, type TaskAction } from '@workspace/sdk';
 
 export type SlaStatus = 'none' | 'ok' | 'due-soon' | 'breached';
 

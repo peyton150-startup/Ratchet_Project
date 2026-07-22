@@ -2,6 +2,7 @@ import express from 'express';
 import type { Express } from 'express';
 import type { Pool } from 'pg';
 import { authMiddleware } from './auth';
+import { requirePermission } from './authz';
 import { eventsRouter } from './events/route';
 
 /** Build the Express app around a given pool. Kept separate from listen() so tests can drive it. */
@@ -22,8 +23,8 @@ export function buildApp(pool: Pool): Express {
     }
   });
 
-  // Event ingest (Phase 2a): auth resolves the tenant, then the router validates and appends.
-  app.use('/events', authMiddleware(pool), eventsRouter(pool));
+  // Event ingest: auth resolves tenant + role, RBAC requires events:ingest, then the router runs.
+  app.use('/events', authMiddleware(pool), requirePermission('events:ingest'), eventsRouter(pool));
 
   return app;
 }

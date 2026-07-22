@@ -9,7 +9,7 @@
     "dev": "tsx watch src/index.ts",
     "migrate": "tsx scripts/migrate.ts",
     "worker": "tsx src/pipeline/worker.ts",
-    "test": "node --import tsx --test test/ingest.test.ts test/rls.test.ts test/rules.test.ts test/tasks.test.ts test/pipeline.test.ts test/routing.test.ts",
+    "test": "node --import tsx --test test/ingest.test.ts test/rls.test.ts test/rules.test.ts test/tasks.test.ts test/pipeline.test.ts test/routing.test.ts test/rbac.test.ts",
     "lint": "eslint src --ext .ts"
   },
   "keywords": [],

@@ -105,6 +105,8 @@ export const metrics = {
   pipelineErrors: new Counter('ratchet_pipeline_errors_total', 'Pipeline message failures'),
   webhookDeliveries: new Counter('ratchet_webhook_deliveries_total', 'Webhook deliveries by status'),
   rateLimited: new Counter('ratchet_rate_limited_total', 'Requests rejected by the rate limiter'),
+  circuitOpened: new Counter('ratchet_circuit_opened_total', 'Circuit breakers opened'),
+  webhookTimeouts: new Counter('ratchet_webhook_timeouts_total', 'Webhook calls that timed out'),
 };
 
 export function renderMetrics(): string {
@@ -118,6 +120,8 @@ export function renderMetrics(): string {
       metrics.pipelineErrors,
       metrics.webhookDeliveries,
       metrics.rateLimited,
+      metrics.circuitOpened,
+      metrics.webhookTimeouts,
     ]
       .map((m) => m.render())
       .join('\n') + '\n'

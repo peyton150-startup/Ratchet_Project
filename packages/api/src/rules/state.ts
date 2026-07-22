@@ -30,6 +30,11 @@ const SCAN_PREDICATES = new Set(['stale_documents_at_underwriting']);
  * transaction, so RLS scopes every query to the current tenant. This is the allowlisted host-code
  * escape hatch from ADR-004 — cross-entity logic lives here, tested, not in the DSL.
  */
+// Every scan is bounded: an unbounded result set is a latent outage once a tenant has enough data
+// (Nygard). If a sweep hits the cap it is doing too much work in one pass — the cap makes that
+// visible instead of letting the worker balloon.
+const MAX_SCAN_ROWS = Number(process.env.MAX_SCAN_ROWS ?? 1000);
+
 export class PgStateProvider implements StateProvider, ScanProvider {
   constructor(private readonly client: PoolClient) {}
 
@@ -43,8 +48,9 @@ export class PgStateProvider implements StateProvider, ScanProvider {
            FROM events
           WHERE event_type = 'verification.completed'
             AND payload->>'applicationId' = $1
-            AND payload->>'outcome' = 'pass'`,
-        [applicationId],
+            AND payload->>'outcome' = 'pass'
+          LIMIT $2`,
+        [applicationId, MAX_SCAN_ROWS],
       );
       const verified = new Set(res.rows.map((r) => r.doc_type));
       const incomeVerified = verified.has('paystub') || verified.has('W2');
@@ -87,8 +93,9 @@ export class PgStateProvider implements StateProvider, ScanProvider {
          FROM docs d
          JOIN latest_stage s ON s.application_id = d.application_id
         WHERE s.stage = 'underwriting'
-          AND d.issued_date < ($1::timestamptz - interval '60 days')`,
-      [now.toISOString()],
+          AND d.issued_date < ($1::timestamptz - interval '60 days')
+        LIMIT $2`,
+      [now.toISOString(), MAX_SCAN_ROWS],
     );
     return res.rows.map((r) => ({
       entityId: r.document_id,

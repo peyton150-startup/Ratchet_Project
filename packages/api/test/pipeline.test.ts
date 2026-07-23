@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { createRedis } from '../src/redis';
 import { drainOutbox, redriveStaleOutbox } from '../src/pipeline/relay';
+import { redriveDeadLetters } from '../src/pipeline/dlq';
 import { ensureGroup, consumeBatch, reclaimPending, type ConsumeDeps } from '../src/pipeline/consumer';
 import { Scheduler } from '../src/pipeline/scheduler';
 import { RulesEngine } from '../src/rules/engine';
@@ -127,6 +128,81 @@ test('pipeline dead-letters a message whose event is missing', async () => {
   assert.equal(dl.rows[0]!.c, 1);
   assert.equal(dl.rows[0]!.source, 'pipeline');
   assert.equal(await taskCount(t.tenantId), 0, 'no task created for a missing event');
+});
+
+// Dead Letter Channel: a dead-lettered pipeline message can be redriven back into a task once the
+// underlying cause is fixed, and the dead-letter row is cleared on success.
+test('dead letters can be redriven back into tasks', async () => {
+  const t = await seedTenant('pipe-dlq-redrive');
+  await seedRule(t.tenantId, r1);
+  const stream = `ratchet:test:${randomUUID()}`;
+  const group = 'g1';
+  await ensureGroup(redis, stream, group);
+
+  const { eventId } = await ingestEvent(appPool, t.tenantId, {
+    idempotencyKey: 'dlqr-1',
+    type: 'application.submitted',
+    entityId: 'app-1',
+    payload: {},
+  });
+
+  // Simulate a message that exhausted its retries and was dead-lettered.
+  await adminPool.query(
+    `INSERT INTO dead_letter (tenant_id, source, reference, payload, error, attempts)
+     VALUES ($1, 'pipeline', $2, $3, 'boom', 3)`,
+    [t.tenantId, eventId, JSON.stringify({ tenantId: t.tenantId, eventId })],
+  );
+  assert.equal(await taskCount(t.tenantId), 0, 'no task while dead-lettered');
+
+  const redriven = await redriveDeadLetters(adminPool, redis, { streamKey: stream });
+  assert.ok(redriven >= 1, 'our dead letter was redriven');
+
+  await consumeBatch(deps, { streamKey: stream, group, consumer: 'c1' });
+  assert.equal(await taskCount(t.tenantId), 1, 'redriven dead letter produced its task');
+
+  const dl = await adminPool.query<{ c: number }>(
+    "SELECT count(*)::int AS c FROM dead_letter WHERE tenant_id = $1 AND source = 'pipeline'",
+    [t.tenantId],
+  );
+  assert.equal(dl.rows[0]!.c, 0, 'redriven dead letters are cleared');
+});
+
+// Per-entity serialization: the advisory lock used during rule evaluation blocks a second
+// same-entity transaction while the first holds it, but leaves a different entity free.
+test('rule evaluation is serialized per entity via advisory lock', async () => {
+  const t = await seedTenant('pipe-lock');
+  const keyX = `${t.tenantId}:entity-X`;
+  const keyY = `${t.tenantId}:entity-Y`;
+  const c1 = await adminPool.connect();
+  const c2 = await adminPool.connect();
+  try {
+    await c1.query('BEGIN');
+    await c1.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [keyX]);
+
+    await c2.query('BEGIN');
+    const contended = await c2.query<{ got: boolean }>(
+      'SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0)) AS got',
+      [keyX],
+    );
+    assert.equal(contended.rows[0]!.got, false, 'same entity is blocked while the first tx holds the lock');
+
+    const other = await c2.query<{ got: boolean }>(
+      'SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0)) AS got',
+      [keyY],
+    );
+    assert.equal(other.rows[0]!.got, true, 'a different entity is not blocked');
+
+    await c1.query('COMMIT'); // releases entity-X
+    const afterRelease = await c2.query<{ got: boolean }>(
+      'SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0)) AS got',
+      [keyX],
+    );
+    assert.equal(afterRelease.rows[0]!.got, true, 'the lock frees on commit');
+    await c2.query('ROLLBACK');
+  } finally {
+    c1.release();
+    c2.release();
+  }
 });
 
 // Auto-assignment: when routing is supplied, a created task is assigned to an eligible agent.

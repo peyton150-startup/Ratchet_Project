@@ -53,6 +53,44 @@ test('duplicate event: same idempotency key is ingested once', async () => {
   assert.deepEqual(await countFor(tenant.tenantId), { events: 1, outbox: 1 });
 });
 
+// Event schema versioning (DDIA Ch.4): the version defaults to 1, is stored per event, and a version
+// change on an otherwise-identical body is a distinct request (not masked as a duplicate).
+test('event schema version defaults to 1, is stored, and participates in the fingerprint', async () => {
+  const v1 = await postEvent(server.url, tenant.rawKey, {
+    idempotencyKey: 'sv-1',
+    type: 'application.submitted',
+    entityId: 'app-1',
+    payload: { amount: 100 },
+  });
+  assert.equal(v1.status, 201);
+
+  const explicit = await postEvent(server.url, tenant.rawKey, {
+    idempotencyKey: 'sv-2',
+    type: 'application.submitted',
+    entityId: 'app-2',
+    schemaVersion: 3,
+    payload: { amount: 100 },
+  });
+  assert.equal(explicit.status, 201);
+
+  const stored = await adminPool.query<{ schema_version: number }>(
+    'SELECT schema_version FROM events WHERE id = ANY($1) ORDER BY schema_version',
+    [[v1.json.eventId, explicit.json.eventId]],
+  );
+  assert.deepEqual(
+    stored.rows.map((r) => r.schema_version),
+    [1, 3],
+    'default 1 and explicit 3 are persisted',
+  );
+
+  // Same idempotency key + same body but a different schemaVersion must NOT be treated as a replay.
+  const base = { idempotencyKey: 'sv-3', type: 'application.submitted', entityId: 'app-3', payload: {} };
+  const firstV = await postEvent(server.url, tenant.rawKey, { ...base, schemaVersion: 1 });
+  assert.equal(firstV.status, 201);
+  const bumped = await postEvent(server.url, tenant.rawKey, { ...base, schemaVersion: 2 });
+  assert.equal(bumped.status, 409, 'a version bump under the same key is a conflict, not a silent replay');
+});
+
 test('malformed payload: rejected with 400 and nothing is written', async () => {
   const unknownType = await postEvent(server.url, tenant.rawKey, {
     idempotencyKey: 'bad-1',

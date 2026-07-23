@@ -12,6 +12,8 @@ export interface EngineEvent {
   entityId: string;
   entityType: string;
   occurredAt: string;
+  /** Producer-set payload schema version (defaults to 1). Lets rules dispatch on payload shape. */
+  schemaVersion?: number;
   payload: Record<string, unknown>;
   delta: Record<string, unknown>;
 }

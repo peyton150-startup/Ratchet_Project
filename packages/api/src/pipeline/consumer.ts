@@ -95,10 +95,11 @@ async function loadEventTx(client: PoolClient, eventId: string): Promise<EngineE
     entity_type: string;
     entity_id: string;
     occurred_at: Date;
+    schema_version: number;
     delta: Record<string, unknown>;
     payload: Record<string, unknown>;
   }>(
-    `SELECT id, event_type, entity_type, entity_id, occurred_at, delta, payload
+    `SELECT id, event_type, entity_type, entity_id, occurred_at, schema_version, delta, payload
        FROM events WHERE id = $1`,
     [eventId],
   );
@@ -110,9 +111,25 @@ async function loadEventTx(client: PoolClient, eventId: string): Promise<EngineE
     entityId: row.entity_id,
     entityType: row.entity_type,
     occurredAt: new Date(row.occurred_at).toISOString(),
+    schemaVersion: row.schema_version,
     payload: row.payload,
     delta: row.delta,
   };
+}
+
+/**
+ * Serialize rule evaluation per entity with a transaction-scoped advisory lock. Rules query current
+ * application state (R7), so two events for the SAME entity evaluated concurrently can each read the
+ * other's half-applied state (write skew / lost update). The lock forces same-entity events through
+ * one at a time — the second waits, then evaluates against the first's committed state — while
+ * different entities still run in parallel. The lock releases automatically at COMMIT/ROLLBACK.
+ *
+ * Note: this removes concurrent interleaving, not cross-consumer ORDERING. Strict per-entity order
+ * (so a cancel can never be applied before its create) needs the stream partitioned by entity; a
+ * single consumer already processes in stream order, so ordering only relaxes with multiple replicas.
+ */
+async function lockEntity(client: PoolClient, tenantId: string, entityId: string): Promise<void> {
+  await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [`${tenantId}:${entityId}`]);
 }
 
 /**
@@ -127,6 +144,9 @@ async function processMessageTx(deps: ConsumeDeps, msg: StreamMessage): Promise<
   return withTenant(deps.appPool, msg.tenantId, async (client) => {
     const event = await loadEventTx(client, msg.eventId);
     if (!event) throw new EventNotFoundError(msg.eventId);
+
+    // Serialize same-entity evaluation before reading state, so rules see a stable snapshot.
+    await lockEntity(client, msg.tenantId, event.entityId);
 
     const decisions = await deps.engine.evaluateEventWithClient(client, msg.tenantId, event);
     const created: TaskView[] = [];
@@ -201,11 +221,19 @@ async function handleEntry(
   );
 
   if (outcome.status === 'ok') {
+    const tasks = outcome.result ?? [];
     // Side effects run only after the transaction commits, so nothing is published for rolled-back work.
-    for (const task of outcome.result ?? []) {
-      if (deps.pubsub) await deps.pubsub.publish(msg.tenantId, task);
-      if (deps.webhooks) {
-        await deps.webhooks.dispatch(msg.tenantId, 'task.created', task).catch(() => {});
+    // Live console updates are cheap and local — publish inline so the UI stays ordered.
+    if (deps.pubsub) {
+      for (const task of tasks) await deps.pubsub.publish(msg.tenantId, task);
+    }
+    // Webhooks call out to third parties (slow, unreliable), so keep them OFF the consumer's critical
+    // path: a laggy endpoint must not throttle task throughput. Each dispatch owns its own retry,
+    // timeout, circuit breaker and delivery record, so fire-and-forget stays at-least-once.
+    if (deps.webhooks) {
+      const dispatcher = deps.webhooks;
+      for (const task of tasks) {
+        void dispatcher.dispatch(msg.tenantId, 'task.created', task).catch(() => {});
       }
     }
   }

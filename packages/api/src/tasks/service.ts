@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
 import { withTenant } from '../db';
 import type { Decision } from '../rules/engine';
@@ -9,19 +10,37 @@ export interface CreateResult {
   created: boolean;
 }
 
+/**
+ * Raised when an INSERT loses the dedup race but the winning row is no longer matchable (e.g. a
+ * scheduled task closed, or was purged, between our INSERT and the follow-up SELECT). It is
+ * retryable: re-running the whole transaction re-inserts cleanly (and, for scheduled rules, correctly
+ * re-fires now that the prior task is terminal).
+ */
+export class DedupRaceError extends Error {
+  constructor(public readonly dedupKey: string) {
+    super(`dedup conflict on ${dedupKey} but no matching row found (concurrent close/purge); retry`);
+    this.name = 'DedupRaceError';
+  }
+}
+
 function dedupKey(eventId: string | null, decision: Decision): string {
   if (eventId) return `${eventId}:${decision.ruleKey}`;
+  // Scheduled rules: identify the subject. Prefer a stable business id; otherwise hash the whole
+  // subject so distinct subjects never collapse onto one task (a bare 'na' fallback silently merged
+  // every subject that lacked documentId/entityId into a single task).
   const subject =
     (decision.subject['documentId'] as string | undefined) ??
     (decision.subject['entityId'] as string | undefined) ??
-    'na';
+    's:' + createHash('sha256').update(JSON.stringify(decision.subject ?? {})).digest('hex').slice(0, 32);
   return `${decision.ruleKey}:${subject}`;
 }
 
 /**
- * Create a task from a create_task decision, exactly-once per (event, rule) — or per
- * (rule, subject) for scheduled rules — via UNIQUE(tenant_id, dedup_key). Concurrent or repeated
- * calls collapse to a single task; losers return the existing task id with created=false.
+ * Create a task from a create_task decision. Event rules are exactly-once per (event, rule) for all
+ * time (partial unique index tasks_dedup_event_uk). Scheduled rules keep at most one ACTIVE task per
+ * (rule, subject) (partial unique index tasks_dedup_sched_uk) and re-fire once the prior task closes.
+ * Concurrent or repeated calls collapse to a single task; losers return the existing id with
+ * created=false. A lost race whose winner is no longer matchable raises DedupRaceError (retryable).
  */
 export async function createTaskFromDecision(
   client: PoolClient,
@@ -37,11 +56,18 @@ export async function createTaskFromDecision(
   const key = dedupKey(eventId, decision);
   const due = slaDueAt(now, action.sla);
 
+  // The ON CONFLICT arbiter and the follow-up SELECT must target the SAME partial index as the path
+  // being inserted, or the conflict is neither collapsed nor found.
+  const scope =
+    eventId !== null
+      ? 'event_id IS NOT NULL'
+      : `event_id IS NULL AND state IN (${ACTIVE_STATES_SQL})`;
+
   const inserted = await client.query<{ id: string }>(
     `INSERT INTO tasks
        (tenant_id, dedup_key, rule_key, rule_version, event_id, queue, template, priority, subject, sla_due_at)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-     ON CONFLICT (tenant_id, dedup_key) DO NOTHING
+     ON CONFLICT (tenant_id, dedup_key) WHERE ${scope} DO NOTHING
      RETURNING id`,
     [
       tenantId,
@@ -61,10 +87,12 @@ export async function createTaskFromDecision(
     return { taskId: inserted.rows[0]!.id, created: true };
   }
   const existing = await client.query<{ id: string }>(
-    `SELECT id FROM tasks WHERE tenant_id = $1 AND dedup_key = $2`,
+    `SELECT id FROM tasks WHERE tenant_id = $1 AND dedup_key = $2 AND ${scope}`,
     [tenantId, key],
   );
-  return { taskId: existing.rows[0]!.id, created: false };
+  const row = existing.rows[0];
+  if (!row) throw new DedupRaceError(key);
+  return { taskId: row.id, created: false };
 }
 
 /** Apply a state-machine transition to a task, enforcing legal transitions. */

@@ -10,9 +10,25 @@ import {
 } from '../tasks/service';
 import { getTaskTx, type TaskView } from '../tasks/read';
 import { assignTask, type RoutingService } from '../routing/assign';
+import { processWithRetry, type RetryPolicy, type Sleep } from '../tasks/processor';
 import type { TaskPubSub } from '../pubsub';
 import type { WebhookDispatcher } from '../webhooks/dispatcher';
 import { metrics } from '../observability';
+
+/** A stream message referencing an event that does not exist: a permanent (non-retryable) failure. */
+export class EventNotFoundError extends Error {
+  constructor(public readonly eventId: string) {
+    super(`event not found: ${eventId}`);
+    this.name = 'EventNotFoundError';
+  }
+}
+
+/** Only genuinely permanent failures skip retries; everything else (DB blips, deadlocks) retries. */
+function isRetryable(err: unknown): boolean {
+  return !(err instanceof EventNotFoundError);
+}
+
+const DEFAULT_RETRY: RetryPolicy = { maxAttempts: 3, baseDelayMs: 50 };
 
 export interface ConsumeDeps {
   redis: Redis;
@@ -22,6 +38,8 @@ export interface ConsumeDeps {
   routing?: RoutingService; // when set, newly created tasks are auto-assigned
   pubsub?: TaskPubSub; // when set, created tasks are published for live updates
   webhooks?: WebhookDispatcher; // when set, task.created is dispatched to integrators
+  retry?: RetryPolicy; // bounded retry before dead-lettering (default 3 attempts, 50ms base)
+  sleep?: Sleep; // injectable backoff sleep (tests pass a no-op)
 }
 
 export interface ConsumeOptions {
@@ -55,6 +73,19 @@ function fieldsToRecord(fields: string[]): Record<string, string> {
     out[fields[i]!] = fields[i + 1]!;
   }
   return out;
+}
+
+/**
+ * Mark the event's outbox row consumed — the terminal state that stops the reconciliation redrive
+ * (relay.redriveStaleOutbox) from re-delivering it. Called in the SAME transaction as the terminal
+ * action (task creation on success, dead-letter on failure) so delivery truth commits atomically
+ * with the outcome. Tenant-scoped by the caller's RLS context. A no-op for synthetic messages with
+ * no outbox row.
+ */
+async function markOutboxConsumed(client: PoolClient, eventId: string): Promise<void> {
+  await client.query(`UPDATE outbox SET status = 'consumed' WHERE event_id = $1 AND status <> 'consumed'`, [
+    eventId,
+  ]);
 }
 
 async function loadEventTx(client: PoolClient, eventId: string): Promise<EngineEvent | null> {
@@ -95,7 +126,7 @@ async function loadEventTx(client: PoolClient, eventId: string): Promise<EngineE
 async function processMessageTx(deps: ConsumeDeps, msg: StreamMessage): Promise<TaskView[]> {
   return withTenant(deps.appPool, msg.tenantId, async (client) => {
     const event = await loadEventTx(client, msg.eventId);
-    if (!event) throw new Error(`event not found: ${msg.eventId}`);
+    if (!event) throw new EventNotFoundError(msg.eventId);
 
     const decisions = await deps.engine.evaluateEventWithClient(client, msg.tenantId, event);
     const created: TaskView[] = [];
@@ -118,6 +149,9 @@ async function processMessageTx(deps: ConsumeDeps, msg: StreamMessage): Promise<
         if (task) created.push(task);
       }
     }
+    // Consumption commits atomically with the tasks: on redelivery the row is already consumed
+    // and task creation dedupes, so redrive never double-creates.
+    await markOutboxConsumed(client, msg.eventId);
     return created;
   });
 }
@@ -140,27 +174,40 @@ async function handleEntry(
   const rec = fieldsToRecord(fields);
   const msg: StreamMessage = { tenantId: rec['tenantId'] ?? '', eventId: rec['eventId'] ?? '' };
 
-  try {
-    const created = await processMessageTx(deps, msg);
+  // Bounded retry with backoff: a transient failure (deadlock, serialization failure, momentary
+  // pool exhaustion) is retried instead of being dropped into the DLQ on first sight. Only after the
+  // budget is exhausted — or immediately for a permanent failure like a missing event — is the
+  // message dead-lettered. The whole tenant transaction is the retry unit, so a retry never
+  // double-applies work (task creation is idempotent).
+  const outcome = await processWithRetry(
+    deps.retry ?? DEFAULT_RETRY,
+    () => processMessageTx(deps, msg),
+    (attempts, error) =>
+      withTenant(deps.appPool, msg.tenantId, async (c) => {
+        await insertDeadLetter(c, msg.tenantId, {
+          source: 'pipeline',
+          reference: msg.eventId,
+          payload: msg,
+          error,
+          attempts,
+        });
+        // Dead-lettering is terminal too: stop the redrive from re-delivering a poison message.
+        await markOutboxConsumed(c, msg.eventId);
+      }).catch(() => {
+        /* unknown tenant can't be DLQ'd under RLS; ack anyway to avoid a poison loop */
+      }),
+    deps.sleep,
+    isRetryable,
+  );
+
+  if (outcome.status === 'ok') {
     // Side effects run only after the transaction commits, so nothing is published for rolled-back work.
-    for (const task of created) {
+    for (const task of outcome.result ?? []) {
       if (deps.pubsub) await deps.pubsub.publish(msg.tenantId, task);
       if (deps.webhooks) {
         await deps.webhooks.dispatch(msg.tenantId, 'task.created', task).catch(() => {});
       }
     }
-  } catch (err) {
-    await withTenant(deps.appPool, msg.tenantId, (c) =>
-      insertDeadLetter(c, msg.tenantId, {
-        source: 'pipeline',
-        reference: msg.eventId,
-        payload: msg,
-        error: err instanceof Error ? err.message : String(err),
-        attempts: 1,
-      }),
-    ).catch(() => {
-      /* unknown tenant can't be DLQ'd under RLS; ack anyway to avoid a poison loop */
-    });
   }
   await deps.redis.xack(opts.streamKey, opts.group, id);
 }

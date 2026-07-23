@@ -2,7 +2,7 @@ import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { randomUUID } from 'node:crypto';
 import { createRedis } from '../src/redis';
-import { drainOutbox } from '../src/pipeline/relay';
+import { drainOutbox, redriveStaleOutbox } from '../src/pipeline/relay';
 import { ensureGroup, consumeBatch, reclaimPending, type ConsumeDeps } from '../src/pipeline/consumer';
 import { Scheduler } from '../src/pipeline/scheduler';
 import { RulesEngine } from '../src/rules/engine';
@@ -66,6 +66,46 @@ test('outbox relay drives an event through to a task', async () => {
   await drainOutbox(adminPool, redis, { streamKey: stream });
   await consumeBatch(deps, { streamKey: stream, group, consumer: 'c1' });
   assert.equal(await taskCount(t.tenantId), 1, 'still exactly one task for our tenant');
+});
+
+// Guaranteed delivery: an event relayed but never consumed (stream entry trimmed/lost) is recovered
+// by the reconciliation redrive from the outbox, and once consumed it is not re-delivered.
+test('redrive recovers a relayed-but-unconsumed outbox row', async () => {
+  const t = await seedTenant('pipe-redrive');
+  await seedRule(t.tenantId, r1);
+  const lost = `ratchet:test:lost:${randomUUID()}`; // relayed here, never consumed (simulates a trim/loss)
+  const stream = `ratchet:test:${randomUUID()}`;
+  const group = 'g1';
+  await ensureGroup(redis, stream, group);
+
+  await ingestEvent(appPool, t.tenantId, {
+    idempotencyKey: 'rd-1',
+    type: 'application.submitted',
+    entityId: 'app-1',
+    payload: {},
+  });
+
+  // Relay hands the row to a stream nobody consumes; the event is effectively lost.
+  await drainOutbox(adminPool, redis, { streamKey: lost });
+  assert.equal(await taskCount(t.tenantId), 0, 'lost before consumption: no task yet');
+
+  // Age our relayed row past the redrive threshold; redrive re-delivers it to the live stream.
+  await adminPool.query(
+    `UPDATE outbox SET relayed_at = now() - interval '1 hour' WHERE tenant_id = $1`,
+    [t.tenantId],
+  );
+  const redriven = await redriveStaleOutbox(adminPool, redis, { streamKey: stream, staleSeconds: 60 });
+  assert.ok(redriven >= 1, 'at least our row was redriven');
+
+  await consumeBatch(deps, { streamKey: stream, group, consumer: 'c1' });
+  assert.equal(await taskCount(t.tenantId), 1, 'redrive recovered the lost event into a task');
+
+  // The row is now consumed, so it drops out of the redrive set even though it is still aged.
+  const status = await adminPool.query<{ status: string }>(
+    'SELECT status FROM outbox WHERE tenant_id = $1',
+    [t.tenantId],
+  );
+  assert.equal(status.rows[0]!.status, 'consumed', 'consumption is recorded in the outbox');
 });
 
 // A message whose event cannot be found is dead-lettered and acked (no poison loop).

@@ -4,7 +4,7 @@
 import { ADMIN_DATABASE_URL, DATABASE_URL } from '../config';
 import { createPool } from '../db';
 import { createRedis } from '../redis';
-import { drainOutbox } from './relay';
+import { drainOutbox, redriveStaleOutbox } from './relay';
 import { ensureGroup, consumeBatch, reclaimPending, type ConsumeDeps } from './consumer';
 import { Scheduler } from './scheduler';
 import { RulesEngine } from '../rules/engine';
@@ -39,6 +39,7 @@ async function main(): Promise<void> {
   let running = true;
   let lastReclaim = 0;
   let lastSweep = 0;
+  let lastRedrive = 0;
   let failures = 0;
 
   const shutdown = async (signal: string): Promise<void> => {
@@ -71,6 +72,11 @@ async function main(): Promise<void> {
       if (now - lastSweep > 60_000) {
         await scheduler.runAll(new Date());
         lastSweep = now;
+      }
+      // Reconciliation: re-deliver outbox rows relayed but never consumed (stream trimmed/lost).
+      if (now - lastRedrive > 60_000) {
+        await redriveStaleOutbox(admin, redis, { streamKey: STREAM });
+        lastRedrive = now;
       }
       outcome = { ok: true, didWork: relayed > 0 || processed > 0 };
     } catch (err) {

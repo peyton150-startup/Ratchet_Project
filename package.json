@@ -7,7 +7,8 @@
     "build": "pnpm -r build",
     "typecheck": "pnpm -r exec tsc --noEmit",
     "test": "pnpm -r test",
-    "migrate": "pnpm --filter @workspace/api migrate"
+    "migrate": "pnpm --filter @workspace/api migrate",
+    "load": "k6 run load/ingest.js"
   },
   "license": "ISC"
 }

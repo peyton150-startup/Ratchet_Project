@@ -36,7 +36,10 @@ export class RatchetClient {
   constructor(opts: RatchetClientOptions) {
     this.baseUrl = opts.baseUrl.replace(/\/$/, '');
     this.apiKey = opts.apiKey;
-    this.fetchFn = opts.fetch ?? fetch;
+    // Bind the default fetch to the global: the browser's fetch throws "Illegal invocation" when
+    // called as a method of another object (here, as this.fetchFn), because it requires `this` to be
+    // the Window/global. A caller-supplied fetch is used as given.
+    this.fetchFn = opts.fetch ?? globalThis.fetch.bind(globalThis);
   }
 
   private headers(extra?: Record<string, string>): Record<string, string> {

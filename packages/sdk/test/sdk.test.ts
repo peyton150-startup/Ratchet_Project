@@ -46,6 +46,29 @@ test('verifyWebhookSignature accepts a valid signature and rejects tampering/sta
   assert.equal(verifyWebhookSignature('secret', body, header, { nowMs: now + 600_000 }), false);
 });
 
+test('default fetch is bound to the global (no browser "Illegal invocation")', async () => {
+  // The browser throws a TypeError if fetch runs with the wrong receiver (this !== window). Node
+  // does not, which is why this class of bug slips through — so reproduce the guard here.
+  const original = globalThis.fetch;
+  const calls: string[] = [];
+  const guarded = function (this: unknown, url: string): Promise<unknown> {
+    if (this !== globalThis) {
+      throw new TypeError("Failed to execute 'fetch' on 'Window': Illegal invocation");
+    }
+    calls.push(url);
+    return Promise.resolve({ ok: true, status: 201, json: async () => ({ eventId: 'e', duplicate: false }) });
+  };
+  globalThis.fetch = guarded as unknown as typeof fetch;
+  try {
+    // No fetch override -> the client must use a default that is safe to call as a method.
+    const c = new RatchetClient({ baseUrl: 'https://api.test', apiKey: 'k' });
+    await c.ingest({ idempotencyKey: 'i', type: 'application.submitted', entityId: 'a' });
+    assert.equal(calls.length, 1, 'the bound default fetch was invoked without an illegal-invocation throw');
+  } finally {
+    globalThis.fetch = original;
+  }
+});
+
 test('ingest posts to /events with the bearer key', async () => {
   const { fn, calls } = fakeFetch({ status: 201, json: { eventId: 'e-1', duplicate: false } });
   const res = await client(fn).ingest({ idempotencyKey: 'i-1', type: 'application.submitted', entityId: 'a-1' });

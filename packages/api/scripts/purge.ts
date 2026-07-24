@@ -30,8 +30,9 @@ const TARGETS: PurgeTarget[] = [
   { table: 'rule_audit', column: 'created_at' },
   { table: 'webhook_deliveries', column: 'created_at' },
   { table: 'dead_letter', column: 'created_at' },
-  // Relayed outbox rows have already been handed to the stream; only pending rows matter.
-  { table: 'outbox', column: 'relayed_at', where: "status = 'relayed'" },
+  // Only CONSUMED outbox rows are safe to delete. 'relayed' rows may still need redriving
+  // (redriveStaleOutbox), so deleting them would reintroduce the silent-loss gap this guards.
+  { table: 'outbox', column: 'relayed_at', where: "status = 'consumed'" },
 ];
 
 const BATCH_SIZE = 5_000;

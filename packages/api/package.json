@@ -13,7 +13,8 @@
     "lint": "eslint src --ext .ts",
     "issue-key": "tsx scripts/issueKey.ts",
     "seed": "tsx scripts/seedDemo.ts",
-    "retention": "tsx scripts/purge.ts"
+    "retention": "tsx scripts/purge.ts",
+    "redrive-dlq": "tsx scripts/redriveDlq.ts"
   },
   "keywords": [],
   "author": "",

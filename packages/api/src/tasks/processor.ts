@@ -24,30 +24,35 @@ export type Sleep = (ms: number) => Promise<void>;
 const defaultSleep: Sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
- * Run `handler` with bounded retries and exponential backoff. On exhaustion, invoke
- * `onDeadLetter` (the poison-message sink) and report dead_lettered. Pure and injectable:
- * tests pass baseDelayMs: 0 and/or a no-op sleep to avoid real waiting.
+ * Run `handler` with bounded retries and exponential backoff. On exhaustion — or as soon as
+ * `isRetryable` returns false for a thrown error — invoke `onDeadLetter` (the poison-message sink)
+ * and report dead_lettered. `isRetryable` defaults to retrying everything, so existing callers are
+ * unchanged; the consumer passes a predicate so permanent failures (e.g. a missing event) go
+ * straight to the DLQ instead of burning the whole retry budget first. Pure and injectable: tests
+ * pass baseDelayMs: 0 and/or a no-op sleep to avoid real waiting.
  */
 export async function processWithRetry<T>(
   policy: RetryPolicy,
   handler: () => Promise<T>,
   onDeadLetter: (attempts: number, error: string) => Promise<void>,
   sleep: Sleep = defaultSleep,
+  isRetryable: (err: unknown) => boolean = () => true,
 ): Promise<RetryOutcome<T>> {
   let lastError = '';
-  for (let attempt = 1; attempt <= policy.maxAttempts; attempt++) {
+  let attempt = 0;
+  for (attempt = 1; attempt <= policy.maxAttempts; attempt++) {
     try {
       const result = await handler();
       return { status: 'ok', attempts: attempt, result };
     } catch (err) {
       lastError = err instanceof Error ? err.message : String(err);
-      if (attempt < policy.maxAttempts) {
-        await sleep(policy.baseDelayMs * 2 ** (attempt - 1));
-      }
+      if (!isRetryable(err) || attempt >= policy.maxAttempts) break;
+      await sleep(policy.baseDelayMs * 2 ** (attempt - 1));
     }
   }
-  await onDeadLetter(policy.maxAttempts, lastError);
-  return { status: 'dead_lettered', attempts: policy.maxAttempts, error: lastError };
+  const attempts = Math.min(attempt, policy.maxAttempts);
+  await onDeadLetter(attempts, lastError);
+  return { status: 'dead_lettered', attempts, error: lastError };
 }
 
 export type ProcessResult =

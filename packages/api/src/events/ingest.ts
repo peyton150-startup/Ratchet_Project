@@ -41,6 +41,7 @@ function requestHash(input: EventInput): string {
         type: input.type,
         entityId: input.entityId,
         occurredAt: input.occurredAt ?? null,
+        schemaVersion: input.schemaVersion ?? 1,
         delta: input.delta ?? {},
         payload: input.payload ?? {},
       }),
@@ -90,8 +91,8 @@ export async function ingestEvent(
 
     await client.query(
       `INSERT INTO events
-         (id, tenant_id, event_type, entity_type, entity_id, occurred_at, delta, payload)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+         (id, tenant_id, event_type, entity_type, entity_id, occurred_at, schema_version, delta, payload)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
       [
         eventId,
         tenantId,
@@ -99,6 +100,7 @@ export async function ingestEvent(
         entityTypeFor(input.type),
         input.entityId,
         occurredAt,
+        input.schemaVersion ?? 1,
         JSON.stringify(input.delta ?? {}),
         JSON.stringify(input.payload ?? {}),
       ],

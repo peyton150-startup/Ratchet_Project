@@ -1,4 +1,14 @@
-version: '3.8'
+# Full local stack: datastores (postgres, redis) + the three app services (api, worker, web).
+#   docker compose up --build         # bring the whole demo up
+#   docker compose run --rm api pnpm --filter @workspace/api issue-key -- --tenant Demo --role admin
+# Then open http://localhost:5173 and paste the printed key. See docs/local-demo.md.
+
+# Shared env for the app services. api/worker connect as the RLS-enforced ratchet_app role;
+# migrations run as the postgres superuser. Hostnames are the compose service names.
+x-app-env: &app-env
+  DATABASE_URL: postgresql://ratchet_app:ratchet_app@postgres:5432/app
+  ADMIN_DATABASE_URL: postgresql://postgres:postgres@postgres:5432/app
+  REDIS_URL: redis://redis:6379
 
 services:
   postgres:
@@ -30,6 +40,60 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  # One-shot: apply migrations (creates the ratchet_app role + schema), then exit.
+  migrate:
+    build: .
+    image: ratchet-app:local
+    command: pnpm --filter @workspace/api migrate
+    environment: *app-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # One-shot: seed the loan-pipeline demo (queues, agents, 12 rules) into tenant "Demo", then exit.
+  seed:
+    image: ratchet-app:local
+    command: pnpm --filter @workspace/api seed -- --tenant Demo
+    environment: *app-env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  api:
+    image: ratchet-app:local
+    command: pnpm --filter @workspace/api exec tsx src/index.ts
+    environment:
+      <<: *app-env
+      PORT: "3000"
+    ports:
+      - "3000:3000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  worker:
+    image: ratchet-app:local
+    command: pnpm --filter @workspace/api worker
+    environment: *app-env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  web:
+    image: ratchet-app:local
+    command: pnpm --filter @workspace/web dev
+    environment:
+      # Vite proxies /graphql (+ws), /events, /webhooks to the api service inside the network.
+      VITE_PROXY_TARGET: http://api:3000
+    ports:
+      - "5173:5173"
+    depends_on:
+      - api
 
 volumes:
   postgres_data:

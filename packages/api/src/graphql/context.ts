@@ -1,8 +1,8 @@
 import type { Pool } from 'pg';
 import { GraphQLError } from 'graphql';
-import { can, isRole, type Permission } from '../authz';
-import type { TaskPubSub } from '../pubsub';
-import type { RulesEngine } from '../rules/engine';
+import { can, isRole, type Permission } from '../authz.js';
+import type { TaskPubSub } from '../pubsub.js';
+import type { RulesEngine } from '../rules/engine.js';
 
 export interface GraphQLContext {
   pool: Pool;

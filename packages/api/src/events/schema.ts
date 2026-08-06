@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { EVENT_TYPES } from './eventTypes';
+import { EVENT_TYPES } from './eventTypes.js';
 
 // Ingest envelope for POST /events. `.strict()` rejects unknown keys so malformed
 // payloads fail validation rather than being silently accepted.

@@ -1,5 +1,5 @@
 import type { PoolClient } from 'pg';
-import { ruleSchema, type Rule } from './types';
+import { ruleSchema, type Rule } from './types.js';
 
 interface RuleRow {
   rule_key: string;

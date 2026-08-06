@@ -1,6 +1,6 @@
 import type { Pool } from 'pg';
-import type { Redis } from '../redis';
-import { metrics } from '../observability';
+import type { Redis } from '../redis.js';
+import { metrics } from '../observability.js';
 
 export interface RelayOptions {
   streamKey: string;

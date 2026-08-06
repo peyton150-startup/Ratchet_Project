@@ -1,19 +1,19 @@
 // Runnable pipeline worker: relay the outbox to the stream, consume the stream into tasks
 // (auto-assigned), periodically reclaim crashed-consumer messages, and run scheduled sweeps.
 // The backoff policy is unit-tested in backoff.ts; the loop itself is not run by CI.
-import { ADMIN_DATABASE_URL, DATABASE_URL } from '../config';
-import { createPool } from '../db';
-import { createRedis } from '../redis';
-import { drainOutbox, redriveStaleOutbox } from './relay';
-import { ensureGroup, consumeBatch, reclaimPending, type ConsumeDeps } from './consumer';
-import { Scheduler } from './scheduler';
-import { RulesEngine } from '../rules/engine';
-import { TaskProcessor } from '../tasks/processor';
-import { RoutingService } from '../routing/assign';
-import { TaskPubSub } from '../pubsub';
-import { WebhookDispatcher } from '../webhooks/dispatcher';
-import { log, metrics } from '../observability';
-import { nextLoopState, IDLE_SLEEP_MS } from './backoff';
+import { ADMIN_DATABASE_URL, DATABASE_URL } from '../config.js';
+import { createPool } from '../db.js';
+import { createRedis } from '../redis.js';
+import { drainOutbox, redriveStaleOutbox } from './relay.js';
+import { ensureGroup, consumeBatch, reclaimPending, type ConsumeDeps } from './consumer.js';
+import { Scheduler } from './scheduler.js';
+import { RulesEngine } from '../rules/engine.js';
+import { TaskProcessor } from '../tasks/processor.js';
+import { RoutingService } from '../routing/assign.js';
+import { TaskPubSub } from '../pubsub.js';
+import { WebhookDispatcher } from '../webhooks/dispatcher.js';
+import { log, metrics } from '../observability.js';
+import { nextLoopState, IDLE_SLEEP_MS } from './backoff.js';
 
 const STREAM = process.env.RATCHET_STREAM ?? 'ratchet:events';
 const GROUP = process.env.RATCHET_GROUP ?? 'rules-workers';

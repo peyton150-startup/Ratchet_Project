@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { Pool } from 'pg';
-import { withTenant } from '../db';
-import { entityTypeFor } from './eventTypes';
-import type { EventInput } from './schema';
+import { withTenant } from '../db.js';
+import { entityTypeFor } from './eventTypes.js';
+import type { EventInput } from './schema.js';
 
 export interface IngestResult {
   eventId: string;

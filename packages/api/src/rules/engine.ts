@@ -1,10 +1,10 @@
 import type { Pool, PoolClient } from 'pg';
-import { withTenant } from '../db';
-import { evaluateCondition, type EvalContext } from './condition';
-import { PgStateProvider, type ScanTarget } from './state';
-import { loadRulesForEvent, loadScheduleRules, insertAuditBatch, type AuditRecord } from './store';
-import { RulesCache } from './cache';
-import type { Action, Rule } from './types';
+import { withTenant } from '../db.js';
+import { evaluateCondition, type EvalContext } from './condition.js';
+import { PgStateProvider, type ScanTarget } from './state.js';
+import { loadRulesForEvent, loadScheduleRules, insertAuditBatch, type AuditRecord } from './store.js';
+import { RulesCache } from './cache.js';
+import type { Action, Rule } from './types.js';
 
 export interface EngineEvent {
   eventId?: string;

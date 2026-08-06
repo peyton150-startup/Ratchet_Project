@@ -1,10 +1,10 @@
 import type { Pool, PoolClient } from 'pg';
-import { withTenant } from '../db';
-import { processWithRetry, type RetryPolicy, type Sleep } from '../tasks/processor';
-import { signBody, SIGNATURE_HEADER } from './signing';
-import { checkWebhookUrl, type Resolver } from './urlGuard';
-import { metrics, log } from '../observability';
-import { CircuitBreaker, withTimeout, TimeoutError } from '../stability';
+import { withTenant } from '../db.js';
+import { processWithRetry, type RetryPolicy, type Sleep } from '../tasks/processor.js';
+import { signBody, SIGNATURE_HEADER } from './signing.js';
+import { checkWebhookUrl, type Resolver } from './urlGuard.js';
+import { metrics, log } from '../observability.js';
+import { CircuitBreaker, withTimeout, TimeoutError } from '../stability.js';
 
 export interface WebhookRow {
   id: string;

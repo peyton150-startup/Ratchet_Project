@@ -1,7 +1,7 @@
 import type { Pool } from 'pg';
-import { RulesEngine } from '../rules/engine';
-import { TaskProcessor } from '../tasks/processor';
-import type { RoutingService } from '../routing/assign';
+import { RulesEngine } from '../rules/engine.js';
+import { TaskProcessor } from '../tasks/processor.js';
+import type { RoutingService } from '../routing/assign.js';
 
 export interface SchedulerDeps {
   admin: Pool; // used only to discover tenants with schedule rules (cross-tenant)

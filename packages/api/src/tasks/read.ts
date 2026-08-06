@@ -1,5 +1,5 @@
 import type { Pool, PoolClient } from 'pg';
-import { withTenant } from '../db';
+import { withTenant } from '../db.js';
 
 // GraphQL-facing task shape (camelCase), mapped from the tasks table.
 export interface TaskView {

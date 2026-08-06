@@ -1,5 +1,5 @@
 import type { Pool } from 'pg';
-import type { Redis } from '../redis';
+import type { Redis } from '../redis.js';
 
 export interface DlqRedriveOptions {
   streamKey: string;

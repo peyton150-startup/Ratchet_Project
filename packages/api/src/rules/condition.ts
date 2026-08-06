@@ -1,4 +1,4 @@
-import type { Condition } from './types';
+import type { Condition } from './types.js';
 
 export interface EventContext {
   type: string;

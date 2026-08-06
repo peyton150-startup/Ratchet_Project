@@ -1,6 +1,6 @@
 import type { Pool, PoolClient } from 'pg';
-import { withTenant } from '../db';
-import { ACTIVE_STATES_SQL } from '../tasks/stateSql';
+import { withTenant } from '../db.js';
+import { ACTIVE_STATES_SQL } from '../tasks/stateSql.js';
 import { isTerminalState } from '@workspace/sdk';
 
 export type Strategy = 'round_robin' | 'skill_tag' | 'capacity';

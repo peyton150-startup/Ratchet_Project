@@ -10,6 +10,7 @@ import { TaskPubSub } from './pubsub';
 import { schema } from './graphql/schema';
 import { RulesEngine } from './rules/engine';
 import { log } from './observability';
+import { allowedOrigins } from './middleware';
 
 const pool = createPool(DATABASE_URL);
 const pubsub = new TaskPubSub(createRedis(process.env.REDIS_URL), process.env.REDIS_URL);
@@ -20,7 +21,16 @@ const httpServer = createServer(app);
 
 // GraphQL subscriptions over WebSocket (ADR-003). Auth via connectionParams.authorization; the
 // resolved tenant + role + pubsub become the subscription context.
-const wsServer = new WebSocketServer({ server: httpServer, path: '/graphql' });
+// CORS does not apply to WebSockets, so the same allowlist is enforced at the handshake instead —
+// otherwise the subscription endpoint would be the one cross-origin hole left open.
+const wsOrigins = allowedOrigins();
+const wsServer = new WebSocketServer({
+  server: httpServer,
+  path: '/graphql',
+  verifyClient: ({ origin }: { origin: string }) =>
+    // No Origin header means a non-browser client (SDK, CLI), which CORS was never protecting.
+    !origin || wsOrigins.size === 0 || wsOrigins.has(origin.replace(/\/$/, '')),
+});
 useServer(
   {
     schema,

@@ -18,6 +18,44 @@ export function requestObserver() {
   };
 }
 
+/**
+ * CORS for the consoles, which are served from a different origin than the API in production.
+ *
+ * Allowlisted rather than `*`: credentials travel in an Authorization header, so a wildcard would
+ * let any page on the internet drive the API with a key it managed to read. An unset CORS_ORIGINS
+ * disables cross-origin access entirely, which is the correct default for a same-origin dev proxy.
+ */
+export function allowedOrigins(originsEnv = process.env.CORS_ORIGINS): Set<string> {
+  return new Set(
+    (originsEnv ?? '')
+      .split(',')
+      .map((o) => o.trim().replace(/\/$/, ''))
+      .filter(Boolean),
+  );
+}
+
+export function cors(originsEnv = process.env.CORS_ORIGINS) {
+  const allowed = allowedOrigins(originsEnv);
+
+  return (req: Request, res: Response, next: NextFunction): void => {
+    const origin = req.headers.origin;
+    if (origin && allowed.has(origin.replace(/\/$/, ''))) {
+      res.setHeader('access-control-allow-origin', origin);
+      // Caches must not serve one tenant origin's response to another.
+      res.setHeader('vary', 'Origin');
+      res.setHeader('access-control-allow-methods', 'GET,POST,PATCH,PUT,DELETE,OPTIONS');
+      res.setHeader('access-control-allow-headers', 'authorization,content-type,accept');
+      res.setHeader('access-control-max-age', '86400');
+    }
+    // Preflight never reaches auth: it carries no Authorization header by definition.
+    if (req.method === 'OPTIONS') {
+      res.sendStatus(204);
+      return;
+    }
+    next();
+  };
+}
+
 export interface RateLimitOptions {
   windowMs: number;
   max: number;

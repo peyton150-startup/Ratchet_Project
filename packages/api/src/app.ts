@@ -8,7 +8,7 @@ import { eventsRouter } from './events/route';
 import { webhooksRouter } from './webhooks/route';
 import { schema } from './graphql/schema';
 import { renderMetrics } from './observability';
-import { errorHandler, rateLimit, requestObserver } from './middleware';
+import { cors, errorHandler, rateLimit, requestObserver } from './middleware';
 import type { TaskPubSub } from './pubsub';
 import type { RulesEngine } from './rules/engine';
 import type { Resolver } from './webhooks/urlGuard';
@@ -25,6 +25,9 @@ export interface AppOptions {
 /** Build the Express app around a given pool. Kept separate from listen() so tests can drive it. */
 export function buildApp(pool: Pool, pubsub?: TaskPubSub, engine?: RulesEngine, opts: AppOptions = {}): Express {
   const app = express();
+
+  // Before the body parser and auth so preflight is answered cheaply and without a key.
+  app.use(cors());
 
   // Cap request bodies: an event envelope is small, and an unbounded body is a cheap DoS.
   app.use(express.json({ limit: process.env.MAX_BODY_SIZE ?? '256kb' }));

@@ -13,7 +13,7 @@
  * credential for that tenant's data.
  */
 import { Client } from 'pg';
-import { hashApiKey } from '../src/auth';
+import { hashApiKey } from '../src/auth.js';
 import { randomUUID } from 'node:crypto';
 
 function arg(name: string): string | undefined {

@@ -56,6 +56,16 @@ holding real data; a guessable key is a live credential for that tenant.
 pnpm --filter @workspace/api issue-key -- --tenant demo --role integrator --key 123456789
 ```
 
+Both forms use `tsx`, which is a devDependency and so is absent from the deployed image. The
+script is also compiled (`tsconfig.ops.json`) so keys can be issued and rotated on Railway with
+plain node — `postgres.railway.internal` only resolves inside Railway, so this has to run there
+rather than from a laptop:
+
+```bash
+railway ssh --service "@workspace/api" -- \
+  node packages/api/dist/scripts/issueKey.js --tenant demo --role admin
+```
+
 ## Deployment
 
 The two halves deploy separately: the consoles are a static bundle with no server, and the API is a long-lived process with a database, so they do not belong on the same platform.

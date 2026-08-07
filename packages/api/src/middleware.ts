@@ -1,5 +1,5 @@
 import type { Request, Response, NextFunction, ErrorRequestHandler } from 'express';
-import { log, metrics } from './observability';
+import { log, metrics } from './observability.js';
 
 /** Record request count + duration, and emit one structured access log per request. */
 export function requestObserver() {

@@ -5,7 +5,7 @@
  * fast failure because it holds resources. Ratchet calls tenant-controlled webhook endpoints from
  * the worker, so a single unresponsive endpoint could otherwise stall the pipeline.
  */
-import { log, metrics } from './observability';
+import { log, metrics } from './observability.js';
 
 export class TimeoutError extends Error {
   constructor(ms: number) {

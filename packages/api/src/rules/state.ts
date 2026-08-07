@@ -1,5 +1,5 @@
 import type { PoolClient } from 'pg';
-import type { EvalContext, StateProvider } from './condition';
+import type { EvalContext, StateProvider } from './condition.js';
 
 // Loan-pipeline stage order (docs/demo-domain.md), used to rank "past underwriting" etc.
 const STAGE_RANK: Record<string, number> = {

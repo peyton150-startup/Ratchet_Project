@@ -1,8 +1,8 @@
 import { Router } from 'express';
 import type { Pool } from 'pg';
-import { eventInputSchema } from './schema';
-import { ingestEvent, IdempotencyConflictError } from './ingest';
-import { metrics } from '../observability';
+import { eventInputSchema } from './schema.js';
+import { ingestEvent, IdempotencyConflictError } from './ingest.js';
+import { metrics } from '../observability.js';
 
 export function eventsRouter(pool: Pool): Router {
   const router = Router();

@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto';
 import type { Pool, PoolClient } from 'pg';
-import { withTenant } from '../db';
-import type { Decision } from '../rules/engine';
-import { nextState, slaDueAt, type TaskAction, type TaskState } from './stateMachine';
-import { ACTIVE_STATES_SQL, TERMINAL_STATES_SQL } from './stateSql';
+import { withTenant } from '../db.js';
+import type { Decision } from '../rules/engine.js';
+import { nextState, slaDueAt, type TaskAction, type TaskState } from './stateMachine.js';
+import { ACTIVE_STATES_SQL, TERMINAL_STATES_SQL } from './stateSql.js';
 
 export interface CreateResult {
   taskId: string;

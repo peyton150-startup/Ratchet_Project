@@ -1,12 +1,12 @@
 import type { Pool } from 'pg';
-import { withTenant } from '../db';
-import type { Decision } from '../rules/engine';
+import { withTenant } from '../db.js';
+import type { Decision } from '../rules/engine.js';
 import {
   createTaskFromDecision,
   cancelTasksForApplication,
   insertDeadLetter,
   type CreateResult,
-} from './service';
+} from './service.js';
 
 export interface RetryPolicy {
   maxAttempts: number;

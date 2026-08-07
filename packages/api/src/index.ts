@@ -1,16 +1,16 @@
 import { createServer } from 'node:http';
 import { WebSocketServer } from 'ws';
 import { useServer } from 'graphql-ws/lib/use/ws';
-import { DATABASE_URL, PORT } from './config';
-import { createPool } from './db';
-import { createRedis } from './redis';
-import { buildApp } from './app';
-import { authenticateKey } from './auth';
-import { TaskPubSub } from './pubsub';
-import { schema } from './graphql/schema';
-import { RulesEngine } from './rules/engine';
-import { log } from './observability';
-import { allowedOrigins } from './middleware';
+import { DATABASE_URL, PORT } from './config.js';
+import { createPool } from './db.js';
+import { createRedis } from './redis.js';
+import { buildApp } from './app.js';
+import { authenticateKey } from './auth.js';
+import { TaskPubSub } from './pubsub.js';
+import { schema } from './graphql/schema.js';
+import { RulesEngine } from './rules/engine.js';
+import { log } from './observability.js';
+import { allowedOrigins } from './middleware.js';
 
 const pool = createPool(DATABASE_URL);
 const pubsub = new TaskPubSub(createRedis(process.env.REDIS_URL), process.env.REDIS_URL);
@@ -41,7 +41,11 @@ useServer(
       return { pool, tenantId: auth?.tenantId, role: auth?.role, pubsub, engine };
     },
   },
-  wsServer,
+  // graphql-ws ships one CommonJS-flavoured .d.ts for both the require and import
+  // conditions, so its internal reference to @types/ws resolves under a different
+  // module mode than ours. The two WebSocketServer types are structurally identical
+  // and this is the same object at runtime; only their nominal identities differ.
+  wsServer as unknown as Parameters<typeof useServer>[1],
 );
 
 httpServer.listen(PORT, () => {

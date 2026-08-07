@@ -2,8 +2,8 @@ import { randomBytes } from 'node:crypto';
 import { Router } from 'express';
 import type { Pool } from 'pg';
 import { z } from 'zod';
-import { withTenant } from '../db';
-import { checkWebhookUrl, type Resolver } from './urlGuard';
+import { withTenant } from '../db.js';
+import { checkWebhookUrl, type Resolver } from './urlGuard.js';
 
 const registerSchema = z
   .object({

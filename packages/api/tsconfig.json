@@ -2,7 +2,14 @@
   "extends": "../../tsconfig.json",
   "compilerOptions": {
     "rootDir": "./src",
-    "outDir": "./dist"
+    "outDir": "./dist",
+    // This package is "type": "module", so the emitted JS is run by Node's ESM
+    // loader, which requires explicit file extensions on relative imports. The
+    // inherited "node" resolution accepted bare specifiers and emitted them
+    // unchanged, producing output that compiled but could not start. NodeNext
+    // makes tsc reject them instead of failing at runtime.
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext"
   },
   "include": ["src"],
   "exclude": ["node_modules", "dist"]

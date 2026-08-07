@@ -1,6 +1,6 @@
 import type { PoolClient } from 'pg';
-import { loadRulesForEvent } from './store';
-import type { Rule } from './types';
+import { loadRulesForEvent } from './store.js';
+import type { Rule } from './types.js';
 
 /**
  * Short-TTL cache of the active rules per (tenant, eventType). Rules change rarely; events are the

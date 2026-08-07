@@ -1,5 +1,5 @@
 import type { Pool } from 'pg';
-import { withTenant } from '../db';
+import { withTenant } from '../db.js';
 
 export interface EventView {
   id: string;

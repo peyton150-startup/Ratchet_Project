@@ -1,5 +1,5 @@
-import { createRedis, type Redis } from './redis';
-import type { TaskView } from './tasks/read';
+import { createRedis, type Redis } from './redis.js';
+import type { TaskView } from './tasks/read.js';
 
 // Per-tenant channel; task changes fan out over Redis so publishes from any process (API mutations,
 // pipeline worker) reach subscribers on the API server (ADR-003 multi-instance fan-out).

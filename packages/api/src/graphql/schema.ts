@@ -1,14 +1,14 @@
 import { GraphQLScalarType, GraphQLError, type GraphQLSchema } from 'graphql';
 import { makeExecutableSchema } from '@graphql-tools/schema';
-import { listTasks, getTask, listQueues } from '../tasks/read';
-import { listEventsForEntity } from '../events/read';
-import { listRuleVersions, createRuleVersion } from '../rules/read';
-import { ruleSchema } from '../rules/types';
-import { RulesEngine } from '../rules/engine';
-import { TaskService } from '../tasks/service';
-import { IllegalTransitionError, type TaskAction } from '../tasks/stateMachine';
-import { RoutingService } from '../routing/assign';
-import { requirePermission, type GraphQLContext } from './context';
+import { listTasks, getTask, listQueues } from '../tasks/read.js';
+import { listEventsForEntity } from '../events/read.js';
+import { listRuleVersions, createRuleVersion } from '../rules/read.js';
+import { ruleSchema } from '../rules/types.js';
+import { RulesEngine } from '../rules/engine.js';
+import { TaskService } from '../tasks/service.js';
+import { IllegalTransitionError, type TaskAction } from '../tasks/stateMachine.js';
+import { RoutingService } from '../routing/assign.js';
+import { requirePermission, type GraphQLContext } from './context.js';
 
 const typeDefs = /* GraphQL */ `
   scalar DateTime

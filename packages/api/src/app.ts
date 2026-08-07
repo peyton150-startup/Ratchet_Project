@@ -2,16 +2,16 @@ import express from 'express';
 import type { Express } from 'express';
 import type { Pool } from 'pg';
 import { createHandler } from 'graphql-http/lib/use/express';
-import { authMiddleware } from './auth';
-import { requirePermission } from './authz';
-import { eventsRouter } from './events/route';
-import { webhooksRouter } from './webhooks/route';
-import { schema } from './graphql/schema';
-import { renderMetrics } from './observability';
-import { cors, errorHandler, rateLimit, requestObserver } from './middleware';
-import type { TaskPubSub } from './pubsub';
-import type { RulesEngine } from './rules/engine';
-import type { Resolver } from './webhooks/urlGuard';
+import { authMiddleware } from './auth.js';
+import { requirePermission } from './authz.js';
+import { eventsRouter } from './events/route.js';
+import { webhooksRouter } from './webhooks/route.js';
+import { schema } from './graphql/schema.js';
+import { renderMetrics } from './observability.js';
+import { cors, errorHandler, rateLimit, requestObserver } from './middleware.js';
+import type { TaskPubSub } from './pubsub.js';
+import type { RulesEngine } from './rules/engine.js';
+import type { Resolver } from './webhooks/urlGuard.js';
 
 export interface AppOptions {
   pubsub?: TaskPubSub;

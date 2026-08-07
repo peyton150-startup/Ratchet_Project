@@ -1,19 +1,19 @@
 import type { Pool, PoolClient } from 'pg';
-import { withTenant } from '../db';
-import type { Redis } from '../redis';
-import { RulesEngine, type EngineEvent } from '../rules/engine';
-import { TaskProcessor } from '../tasks/processor';
+import { withTenant } from '../db.js';
+import type { Redis } from '../redis.js';
+import { RulesEngine, type EngineEvent } from '../rules/engine.js';
+import { TaskProcessor } from '../tasks/processor.js';
 import {
   insertDeadLetter,
   createTaskFromDecision,
   cancelTasksForApplication,
-} from '../tasks/service';
-import { getTaskTx, type TaskView } from '../tasks/read';
-import { assignTask, type RoutingService } from '../routing/assign';
-import { processWithRetry, type RetryPolicy, type Sleep } from '../tasks/processor';
-import type { TaskPubSub } from '../pubsub';
-import type { WebhookDispatcher } from '../webhooks/dispatcher';
-import { metrics } from '../observability';
+} from '../tasks/service.js';
+import { getTaskTx, type TaskView } from '../tasks/read.js';
+import { assignTask, type RoutingService } from '../routing/assign.js';
+import { processWithRetry, type RetryPolicy, type Sleep } from '../tasks/processor.js';
+import type { TaskPubSub } from '../pubsub.js';
+import type { WebhookDispatcher } from '../webhooks/dispatcher.js';
+import { metrics } from '../observability.js';
 
 /** A stream message referencing an event that does not exist: a permanent (non-retryable) failure. */
 export class EventNotFoundError extends Error {

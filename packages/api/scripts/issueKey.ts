@@ -6,6 +6,11 @@
  * and can never be recovered — rotate by issuing a new key and deleting the old row.
  *
  *   pnpm --filter @workspace/api issue-key -- --tenant "Acme" --role admin
+ *
+ * --key sets the plaintext instead of generating one, for a memorable key while testing.
+ * Nothing validates key format — auth just hashes the bearer token — so any string works.
+ * Only ever use it against a local or throwaway database: a guessable key is a live
+ * credential for that tenant's data.
  */
 import { Client } from 'pg';
 import { hashApiKey } from '../src/auth';
@@ -19,9 +24,13 @@ function arg(name: string): string | undefined {
 async function main(): Promise<void> {
   const tenantName = arg('tenant');
   const role = arg('role') ?? 'integrator';
+  const explicitKey = arg('key');
   const connectionString = process.env.ADMIN_DATABASE_URL ?? process.env.DATABASE_URL;
 
-  if (!tenantName) throw new Error('usage: issue-key --tenant <name> [--role operator|admin|integrator]');
+  if (!tenantName)
+    throw new Error(
+      'usage: issue-key --tenant <name> [--role operator|admin|integrator] [--key <plaintext>]',
+    );
   if (!['operator', 'admin', 'integrator'].includes(role)) throw new Error(`invalid role: ${role}`);
   if (!connectionString) throw new Error('ADMIN_DATABASE_URL or DATABASE_URL must be set');
 
@@ -39,17 +48,22 @@ async function main(): Promise<void> {
         ])
       ).rows[0]!.id;
 
-    const rawKey = `rk_${randomUUID().replace(/-/g, '')}`;
-    await client.query('INSERT INTO api_keys (tenant_id, key_hash, role) VALUES ($1, $2, $3)', [
-      tenantId,
-      hashApiKey(rawKey),
-      role,
-    ]);
+    const rawKey = explicitKey ?? `rk_${randomUUID().replace(/-/g, '')}`;
+    // key_hash is UNIQUE; upsert so re-issuing the same --key re-points it instead of failing.
+    await client.query(
+      `INSERT INTO api_keys (tenant_id, key_hash, role) VALUES ($1, $2, $3)
+       ON CONFLICT (key_hash) DO UPDATE SET tenant_id = EXCLUDED.tenant_id, role = EXCLUDED.role`,
+      [tenantId, hashApiKey(rawKey), role],
+    );
 
     console.log(`tenant: ${tenantName} (${tenantId})`);
     console.log(`role:   ${role}`);
     console.log(`key:    ${rawKey}`);
-    console.log('\nStore this key now — only its hash is saved, so it cannot be shown again.');
+    if (explicitKey) {
+      console.log('\nThis key was supplied, not generated — keep it to non-production databases.');
+    } else {
+      console.log('\nStore this key now — only its hash is saved, so it cannot be shown again.');
+    }
   } finally {
     await client.end();
   }

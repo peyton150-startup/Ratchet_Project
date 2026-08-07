@@ -6,6 +6,7 @@
     "watchPatterns": ["packages/api/**", "packages/sdk/**"]
   },
   "deploy": {
+    "preDeployCommand": "node packages/api/dist/migrate.js",
     "startCommand": "node packages/api/dist/index.js",
     "healthcheckPath": "/health",
     "healthcheckTimeout": 30,

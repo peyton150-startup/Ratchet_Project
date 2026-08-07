@@ -1,0 +1,16 @@
+{
+  // The migration runner has to be executable in a deployed image, where tsx (a
+  // devDependency) is not guaranteed to exist. Compiling it alongside the server
+  // means the pre-deploy step runs plain node.
+  //
+  // outDir is ./dist rather than a separate directory on purpose: migrate.ts locates
+  // migrations/ relative to its own file, so dist/migrate.js resolves ../migrations
+  // to packages/api/migrations. A nested output directory would break that.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "./scripts",
+    "outDir": "./dist"
+  },
+  "include": ["scripts/migrate.ts"],
+  "exclude": ["node_modules", "dist"]
+}

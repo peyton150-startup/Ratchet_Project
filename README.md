@@ -15,13 +15,13 @@ The problem it solves: in multi-step operational processes like loan origination
 
 ## Stack
 
-TypeScript throughout. Node and Fastify for the API, React for the consoles, Postgres for the event log and application state, Redis for streams, caching, and pub/sub. GraphQL for the consoles, REST plus signed webhooks for integrators. pnpm workspaces.
+TypeScript throughout. Node and Express for the API, React for the consoles, Postgres for the event log and application state, Redis for streams, caching, and pub/sub. GraphQL for the consoles, REST plus signed webhooks for integrators. pnpm workspaces.
 
 ```
 packages/api      ingest, rules engine, task service, pipeline, webhooks, GraphQL
 packages/web      operator and admin consoles
 packages/sdk      shared domain module and typed client
-packages/workers  background processing entrypoint
+packages/workers  placeholder; the runnable pipeline worker is packages/api/src/pipeline/worker.ts
 load/             k6 load test proving the throughput SLO
 docs/             design doc, scope statement, demo domain, ADRs
 ```
@@ -39,7 +39,7 @@ pnpm --filter @workspace/api dev
 Seed the demo domain, a loan origination pipeline with twelve rules:
 
 ```bash
-pnpm --filter @workspace/api seed-demo
+pnpm --filter @workspace/api seed
 ```
 
 Issue an API key to post events:
@@ -47,6 +47,34 @@ Issue an API key to post events:
 ```bash
 pnpm --filter @workspace/api issue-key -- --tenant demo --role integrator
 ```
+
+## Deployment
+
+The two halves deploy separately: the consoles are a static bundle with no server, and the API is a long-lived process with a database, so they do not belong on the same platform.
+
+| | Platform | Notes |
+|---|---|---|
+| `packages/web` | Vercel — project `ratchet-project-web` | Vite preset, root directory `packages/web`, **"Include files outside the root directory" enabled** so the `@workspace/sdk` workspace dependency resolves |
+| `packages/api` | Railway — service `@workspace/api` | config in [`packages/api/railway.json`](packages/api/railway.json) |
+| pipeline worker | Railway — service `@workspace/workers` | config in [`packages/api/railway.worker.json`](packages/api/railway.worker.json); runs the API package's worker entrypoint |
+| Postgres | Railway | private networking only, no public proxy |
+| Redis | Upstash | requires TLS, so the URL scheme is `rediss://`, not `redis://` |
+
+Build order matters on both platforms: `@workspace/sdk` must be built before `@workspace/api` or `@workspace/web`, because both resolve it through `dist/`. Building only the leaf package fails with `TS2307: Cannot find module '@workspace/sdk'`.
+
+Migrations run automatically as a Railway pre-deploy step (`node packages/api/dist/migrate.js`). The runner is compiled rather than invoked through `tsx`, because `tsx` is a devDependency and is not guaranteed to exist in a deployed image. It is forward-only and idempotent, tracked in `schema_migrations`.
+
+Environment variables that must be set, beyond what each platform injects:
+
+| Variable | Where | Notes |
+|---|---|---|
+| `VITE_API_URL` | Vercel | baked in at build time, so changing it requires a redeploy |
+| `DATABASE_URL` | Railway api + workers | the least-privilege `ratchet_app` role — **not** the `postgres` superuser, which bypasses row-level security and would silently disable tenant isolation |
+| `ADMIN_DATABASE_URL` | Railway api + workers | superuser; migrations create roles and set `FORCE` RLS |
+| `REDIS_URL` | Railway api + workers | `rediss://` |
+| `CORS_ORIGINS` | Railway api | comma-separated; an unset value disables cross-origin access entirely. Must list every origin the consoles are served from |
+
+`CORS_ORIGINS` also governs the WebSocket handshake, since CORS does not apply to WebSockets and the subscription endpoint enforces the same allowlist at `verifyClient`.
 
 ## Testing
 

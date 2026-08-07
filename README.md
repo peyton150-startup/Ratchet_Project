@@ -48,6 +48,14 @@ Issue an API key to post events:
 pnpm --filter @workspace/api issue-key -- --tenant demo --role integrator
 ```
 
+The key is generated and printed once. For local testing you can pin a memorable one with
+`--key` instead — re-running with the same `--key` is safe. Never do this against a database
+holding real data; a guessable key is a live credential for that tenant.
+
+```bash
+pnpm --filter @workspace/api issue-key -- --tenant demo --role integrator --key 123456789
+```
+
 ## Deployment
 
 The two halves deploy separately: the consoles are a static bundle with no server, and the API is a long-lived process with a database, so they do not belong on the same platform.

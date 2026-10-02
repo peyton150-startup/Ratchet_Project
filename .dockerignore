@@ -1,0 +1,21 @@
+# The backend image needs packages/sdk, packages/api and the workspace manifests. Nothing else.
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+.git
+.github
+.claude
+.railway
+.env
+.env.*
+docs
+load
+*.md
+docker-compose.yml
+packages/api/test
+packages/sdk/test
+# Only the manifests of these two are needed, for pnpm's lockfile check.
+packages/web/*
+!packages/web/package.json
+packages/workers/*
+!packages/workers/package.json

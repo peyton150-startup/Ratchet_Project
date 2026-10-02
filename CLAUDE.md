@@ -4,7 +4,31 @@ Deployment notes that are not discoverable from the code. Each one below has alr
 caused a failure that looked like success — a green build, a passing healthcheck, or a
 200 response — while the system was actually broken.
 
+## Supabase
+
+**Connection strings must end in `?sslmode=require`.** Without it `pg` connects in plaintext
+and Supabase's pooler accepts the connection, so everything works while credentials and tenant
+data cross the internet unencrypted. With it, `pg` verifies against Supabase's own CA, which
+only the Docker image trusts (`NODE_EXTRA_CA_CERTS`). Running a script from a laptop without
+that variable fails with `SELF_SIGNED_CERT_IN_CHAIN`; the fix is the variable, not
+`sslmode=no-verify`.
+
+**Run `packages/api/scripts/supabase/bootstrap.sql` before the first migration on a new
+project.** Supabase grants its Data API roles full access to every new table in `public`, and
+`tenants` has no RLS. Migrations applied without the bootstrap succeed, the app works, and the
+tenant list is readable by anyone holding the project's public key.
+
+**Supabase's `postgres` role is not a superuser, but it has `BYPASSRLS`.** The rule below about
+`DATABASE_URL` applies unchanged: pointing it at `postgres` silently disables tenant isolation.
+
+**Do not run the API test suite against it.** The suite needs a database it can fill with
+throwaway tenants. Locally it also fails one pipeline test against a database that earlier runs
+have dirtied; a fresh database passes 79/79.
+
 ## Railway
+
+The previous backend host, retired when the trial ended. These stay until the Northflank
+cutover in `docs/deployment.md` is verified.
 
 **Redeploy after changing variables.** Setting a variable does not restart the service,
 and `--skip-deploys` guarantees it will not. Running containers keep the environment they

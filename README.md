@@ -57,13 +57,11 @@ pnpm --filter @workspace/api issue-key -- --tenant demo --role integrator --key 
 ```
 
 Both forms use `tsx`, which is a devDependency and so is absent from the deployed image. The
-script is also compiled (`tsconfig.ops.json`) so keys can be issued and rotated on Railway with
-plain node — `postgres.railway.internal` only resolves inside Railway, so this has to run there
-rather than from a laptop:
+script is also compiled (`tsconfig.ops.json`) so keys can be issued and rotated from inside a
+running container with plain node:
 
 ```bash
-railway ssh --service "@workspace/api" -- \
-  node packages/api/dist/scripts/issueKey.js --tenant demo --role admin
+node packages/api/dist/scripts/issueKey.js --tenant demo --role admin
 ```
 
 ## Deployment
@@ -73,24 +71,27 @@ The two halves deploy separately: the consoles are a static bundle with no serve
 | | Platform | Notes |
 |---|---|---|
 | `packages/web` | Vercel — project `ratchet-project-web` | Vite preset, root directory `packages/web`, **"Include files outside the root directory" enabled** so the `@workspace/sdk` workspace dependency resolves |
-| `packages/api` | Railway — service `@workspace/api` | config in [`packages/api/railway.json`](packages/api/railway.json) |
-| pipeline worker | Railway — service `@workspace/workers` | config in [`packages/api/railway.worker.json`](packages/api/railway.worker.json); runs the API package's worker entrypoint |
-| Postgres | Railway | private networking only, no public proxy |
+| `packages/api` | Northflank — service `ratchet-api` | built from the root [`Dockerfile`](Dockerfile); default command |
+| pipeline worker | Northflank — service `ratchet-worker` | same image, command `node packages/api/dist/pipeline/worker.js` |
+| migrations | Northflank — job `ratchet-migrate` | same image, command `node packages/api/dist/migrate.js` |
+| Postgres | Supabase | used as plain Postgres through the session pooler; no Supabase APIs |
 | Redis | Upstash | requires TLS, so the URL scheme is `rediss://`, not `redis://` |
+
+The full procedure, the Supabase setup, the verification checklist and what has and has not been verified are in [docs/deployment.md](docs/deployment.md). The backend previously ran on Railway; `packages/api/railway.json` and `railway.worker.json` remain until the Northflank cutover is verified.
 
 Build order matters on both platforms: `@workspace/sdk` must be built before `@workspace/api` or `@workspace/web`, because both resolve it through `dist/`. Building only the leaf package fails with `TS2307: Cannot find module '@workspace/sdk'`.
 
-Migrations run automatically as a Railway pre-deploy step (`node packages/api/dist/migrate.js`). The runner is compiled rather than invoked through `tsx`, because `tsx` is a devDependency and is not guaranteed to exist in a deployed image. It is forward-only and idempotent, tracked in `schema_migrations`.
+Migrations run as a separate job before a release (`node packages/api/dist/migrate.js`), never on service start, so replicas cannot race each other. The runner is compiled rather than invoked through `tsx`, because `tsx` is a devDependency and does not exist in the deployed image. It is forward-only and idempotent, tracked in `schema_migrations`.
 
 Environment variables that must be set, beyond what each platform injects:
 
 | Variable | Where | Notes |
 |---|---|---|
 | `VITE_API_URL` | Vercel | baked in at build time, so changing it requires a redeploy |
-| `DATABASE_URL` | Railway api + workers | the least-privilege `ratchet_app` role — **not** the `postgres` superuser, which bypasses row-level security and would silently disable tenant isolation |
-| `ADMIN_DATABASE_URL` | Railway api + workers | superuser; migrations create roles and set `FORCE` RLS |
-| `REDIS_URL` | Railway api + workers | `rediss://` |
-| `CORS_ORIGINS` | Railway api | comma-separated; an unset value disables cross-origin access entirely. Must list every origin the consoles are served from |
+| `DATABASE_URL` | api + worker | the least-privilege `ratchet_app` role — **not** `postgres`, which bypasses row-level security and would silently disable tenant isolation. Must end in `?sslmode=require` |
+| `ADMIN_DATABASE_URL` | worker + migrate job | the `postgres` role; migrations create roles and set `FORCE` RLS, and the worker's relay and sweeps are cross-tenant. Must end in `?sslmode=require` |
+| `REDIS_URL` | api + worker | `rediss://` |
+| `CORS_ORIGINS` | api | comma-separated; an unset value disables cross-origin access entirely. Must list every origin the consoles are served from |
 
 `CORS_ORIGINS` also governs the WebSocket handshake, since CORS does not apply to WebSockets and the subscription endpoint enforces the same allowlist at `verifyClient`.
 

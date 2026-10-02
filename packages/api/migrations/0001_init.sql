@@ -3,6 +3,9 @@
 -- Run as a superuser/owner role (migrations); the API connects as the non-owner role below.
 
 -- App role the API connects as. Non-owner, non-superuser, so RLS is enforced for it.
+-- The password below is for local development and CI only. On a hosted database the role is
+-- created first by scripts/supabase/bootstrap.sql, so this branch is skipped and the literal
+-- never becomes a live credential.
 DO $$
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'ratchet_app') THEN

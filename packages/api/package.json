@@ -15,7 +15,8 @@
     "issue-key": "tsx scripts/issueKey.ts",
     "seed": "tsx scripts/seedDemo.ts",
     "retention": "tsx scripts/purge.ts",
-    "redrive-dlq": "tsx scripts/redriveDlq.ts"
+    "redrive-dlq": "tsx scripts/redriveDlq.ts",
+    "simulate-loan": "tsx scripts/simulateLoan.ts"
   },
   "keywords": [],
   "author": "",

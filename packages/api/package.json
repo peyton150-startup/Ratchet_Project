@@ -16,7 +16,8 @@
     "seed": "tsx scripts/seedDemo.ts",
     "retention": "tsx scripts/purge.ts",
     "redrive-dlq": "tsx scripts/redriveDlq.ts",
-    "simulate-loan": "tsx scripts/simulateLoan.ts"
+    "simulate-loan": "tsx scripts/simulateLoan.ts",
+    "verification-bot": "tsx scripts/verificationBot.ts"
   },
   "keywords": [],
   "author": "",

@@ -1,4 +1,11 @@
-import { transitionTarget, type Task, type TaskAction, type TaskFilter } from '@workspace/sdk';
+import {
+  RatchetError,
+  transitionTarget,
+  type EventInput,
+  type Task,
+  type TaskAction,
+  type TaskFilter,
+} from '@workspace/sdk';
 import type { ConnectionStatus, ConsoleApi, EventSummary, RuleVersion } from '../src/lib/api';
 
 export function makeTask(overrides: Partial<Task> = {}): Task {
@@ -25,6 +32,10 @@ export interface StubOptions {
   queues?: string[];
   rules?: RuleVersion[];
   events?: EventSummary[];
+  /** Make ingest fail the way the API would, e.g. { status: 403, message: 'forbidden' }. */
+  ingestError?: { status: number; message: string };
+  /** Make reading rules fail, as it does for a key without rules:read. */
+  rulesForbidden?: boolean;
 }
 
 export interface StubApi {
@@ -34,6 +45,7 @@ export interface StubApi {
     created: unknown[];
     dryRuns: unknown[];
     taskFilters: TaskFilter[];
+    ingested: EventInput[];
   };
   /** Push a task through the subscription, as the server would. */
   pushUpdate: (task: Task) => void;
@@ -48,7 +60,8 @@ export interface StubApi {
  * a live server, so they assert on rendering and interaction, not transport.
  */
 export function stubApi(opts: StubOptions = {}): StubApi {
-  const calls: StubApi['calls'] = { act: [], created: [], dryRuns: [], taskFilters: [] };
+  const calls: StubApi['calls'] = { act: [], created: [], dryRuns: [], taskFilters: [], ingested: [] };
+  const seenKeys = new Map<string, string>();
   let subscriber: ((t: Task) => void) | null = null;
   let subscriptionError: ((message: string) => void) | null = null;
   let statusListener: ((s: ConnectionStatus) => void) | null = null;
@@ -78,7 +91,20 @@ export function stubApi(opts: StubOptions = {}): StubApi {
         statusListener = null;
       };
     },
-    rules: async () => opts.rules ?? [],
+    rules: async () => {
+      if (opts.rulesForbidden) throw new RatchetError('forbidden', 200);
+      return opts.rules ?? [];
+    },
+    ingest: async (event: EventInput) => {
+      calls.ingested.push(event);
+      if (opts.ingestError) throw new RatchetError(opts.ingestError.message, opts.ingestError.status);
+      // Exactly-once, as the API does it: a repeated idempotency key returns the first event's id.
+      const existing = seenKeys.get(event.idempotencyKey);
+      if (existing) return { eventId: existing, duplicate: true };
+      const eventId = `evt-${seenKeys.size + 1}`;
+      seenKeys.set(event.idempotencyKey, eventId);
+      return { eventId, duplicate: false };
+    },
     createRuleVersion: async (draft: unknown) => {
       calls.created.push(draft);
       return { ruleKey: 'R1', version: 1, trigger: {}, condition: null, action: {}, active: true, createdAt: '' };

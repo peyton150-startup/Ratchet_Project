@@ -4,6 +4,7 @@ import { RatchetClient, RatchetError } from '@workspace/sdk';
 import { ConsoleApi } from './lib/api';
 import { OperatorConsole } from './operator/OperatorConsole';
 import { AdminConsole } from './admin/AdminConsole';
+import { EventConsole } from './events/EventConsole';
 import { Button, Card, PageShell, tokens } from './components';
 
 const STORAGE_KEY = 'ratchet.apiKey';
@@ -98,9 +99,16 @@ function App() {
   return <ConsoleSwitcher key={apiKey} apiKey={apiKey} onSignOut={signOut} />;
 }
 
-/** Both consoles share one API instance (and therefore one WebSocket) and the component library. */
+const VIEWS = [
+  { id: 'operator', label: 'Operator' },
+  { id: 'admin', label: 'Admin' },
+  { id: 'events', label: 'Send event' },
+] as const;
+type View = (typeof VIEWS)[number]['id'];
+
+/** The views share one API instance (and therefore one WebSocket) and the component library. */
 function ConsoleSwitcher({ apiKey, onSignOut }: { apiKey: string; onSignOut: () => void }) {
-  const [view, setView] = useState<'operator' | 'admin'>('operator');
+  const [view, setView] = useState<View>('operator');
   const [api] = useState(() => new ConsoleApi({ apiKey, baseUrl: API_BASE_URL }));
 
   return (
@@ -114,12 +122,11 @@ function ConsoleSwitcher({ apiKey, onSignOut }: { apiKey: string; onSignOut: () 
           borderBottom: `1px solid ${tokens.color.border}`,
         }}
       >
-        <Button tone={view === 'operator' ? 'accent' : 'neutral'} onClick={() => setView('operator')}>
-          Operator
-        </Button>
-        <Button tone={view === 'admin' ? 'accent' : 'neutral'} onClick={() => setView('admin')}>
-          Admin
-        </Button>
+        {VIEWS.map((v) => (
+          <Button key={v.id} tone={view === v.id ? 'accent' : 'neutral'} onClick={() => setView(v.id)}>
+            {v.label}
+          </Button>
+        ))}
         <div style={{ marginLeft: 'auto' }}>
           <Button
             onClick={() => {
@@ -131,7 +138,12 @@ function ConsoleSwitcher({ apiKey, onSignOut }: { apiKey: string; onSignOut: () 
           </Button>
         </div>
       </div>
-      {view === 'operator' ? <OperatorConsole api={api} /> : <AdminConsole api={api} />}
+      {view === 'operator' ? <OperatorConsole api={api} /> : null}
+      {view === 'admin' ? <AdminConsole api={api} /> : null}
+      {/* Kept mounted: the form and the log of what was sent survive a trip to the Operator view. */}
+      <div style={{ display: view === 'events' ? 'block' : 'none' }}>
+        <EventConsole api={api} visible={view === 'events'} />
+      </div>
     </div>
   );
 }

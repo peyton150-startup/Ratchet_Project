@@ -78,6 +78,31 @@ test('ingest posts to /events with the bearer key', async () => {
   assert.equal(calls[0]!.headers['authorization'], 'Bearer k-123');
 });
 
+test('a refused event reports why, not just the status', async () => {
+  const { fn } = fakeFetch({
+    ok: false,
+    status: 400,
+    json: { error: 'invalid event', details: { formErrors: [], fieldErrors: { entityId: ['Required'] } } },
+  });
+  await assert.rejects(
+    client(fn).ingest({ idempotencyKey: 'i', type: 'application.submitted', entityId: '' }),
+    (e) => e instanceof RatchetError && e.status === 400 && e.message === 'ingest failed: invalid event: entityId: Required',
+  );
+
+  // No JSON body at all (a proxy error page): fall back to the status.
+  const bare = (async () => ({
+    ok: false,
+    status: 502,
+    json: async () => {
+      throw new Error('not json');
+    },
+  })) as unknown as typeof fetch;
+  await assert.rejects(
+    client(bare).ingest({ idempotencyKey: 'i', type: 'application.submitted', entityId: 'a' }),
+    (e) => e instanceof RatchetError && e.message === 'ingest failed: HTTP 502',
+  );
+});
+
 test('tasks() runs a GraphQL query and returns the list', async () => {
   const task = { id: 't-1', state: 'open', queue: 'intake' };
   const { fn, calls } = fakeFetch({ json: { data: { tasks: [task] } } });

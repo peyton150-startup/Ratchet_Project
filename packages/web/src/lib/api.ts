@@ -1,4 +1,12 @@
-import { RatchetClient, TASK_FIELDS, type Task, type TaskAction, type TaskFilter } from '@workspace/sdk';
+import {
+  RatchetClient,
+  TASK_FIELDS,
+  type EventInput,
+  type IngestResult,
+  type Task,
+  type TaskAction,
+  type TaskFilter,
+} from '@workspace/sdk';
 import { createClient, type Client as WsClient } from 'graphql-ws';
 
 /** State of the live-updates socket, as the operator console's badge reports it. */
@@ -67,6 +75,11 @@ export class ConsoleApi {
   /** Run a state-machine action. Every action has a `<action>Task` method on the SDK client. */
   act(action: TaskAction, id: string): Promise<Task> {
     return this.client[`${action}Task`](id);
+  }
+
+  /** Post an event to the ingest API, as a client system would. Needs events:ingest. */
+  ingest(event: EventInput): Promise<IngestResult> {
+    return this.client.ingest(event);
   }
 
   /** All stored rule versions (including superseded) — the admin console's history + diffs. */

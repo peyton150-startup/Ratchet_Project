@@ -44,6 +44,7 @@ export interface StubApi {
     act: Array<{ action: string; id: string }>;
     created: unknown[];
     dryRuns: unknown[];
+    dryRunEvents: unknown[];
     taskFilters: TaskFilter[];
     ingested: EventInput[];
   };
@@ -60,7 +61,14 @@ export interface StubApi {
  * a live server, so they assert on rendering and interaction, not transport.
  */
 export function stubApi(opts: StubOptions = {}): StubApi {
-  const calls: StubApi['calls'] = { act: [], created: [], dryRuns: [], taskFilters: [], ingested: [] };
+  const calls: StubApi['calls'] = {
+    act: [],
+    created: [],
+    dryRuns: [],
+    dryRunEvents: [],
+    taskFilters: [],
+    ingested: [],
+  };
   const seenKeys = new Map<string, string>();
   let subscriber: ((t: Task) => void) | null = null;
   let subscriptionError: ((message: string) => void) | null = null;
@@ -105,12 +113,14 @@ export function stubApi(opts: StubOptions = {}): StubApi {
       seenKeys.set(event.idempotencyKey, eventId);
       return { eventId, duplicate: false };
     },
-    createRuleVersion: async (draft: unknown) => {
+    createRuleVersion: async (draft: { ruleKey: string }) => {
       calls.created.push(draft);
-      return { ruleKey: 'R1', version: 1, trigger: {}, condition: null, action: {}, active: true, createdAt: '' };
+      const version = (opts.rules ?? []).filter((r) => r.ruleKey === draft.ruleKey).length + 1;
+      return { ...draft, version, trigger: {}, condition: null, action: {}, active: true, createdAt: '' };
     },
-    dryRunRule: async (rule: unknown) => {
+    dryRunRule: async (rule: unknown, event: unknown) => {
       calls.dryRuns.push(rule);
+      calls.dryRunEvents.push(event);
       return { matched: true, decision: { ruleKey: 'R1' } };
     },
     subscribeToQueue: (

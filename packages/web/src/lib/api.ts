@@ -120,8 +120,8 @@ export class ConsoleApi {
     return this.client
       .graphql<{ dryRunRule: { matched: boolean; decision: unknown } }>(
         'mutation($rule: JSON!, $event: JSON!) { dryRunRule(rule: $rule, event: $event) { matched decision } }',
-        // The API validates a complete rule; drafts carry no version until published.
-        { rule: { ...(rule as Record<string, unknown>), version: 1 }, event },
+        // The API validates a complete rule; a draft that names no version is treated as a first one.
+        { rule: { version: 1, ...(rule as Record<string, unknown>) }, event },
       )
       .then((d) => d.dryRunRule);
   }

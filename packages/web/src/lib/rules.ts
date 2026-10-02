@@ -10,11 +10,13 @@ import {
   SLA_PATTERN,
   SLA_HINT,
   EVENT_TYPES,
+  SCAN_PREDICATES,
+  CANCEL_SCOPES,
   type Condition,
   type ComparisonOp,
 } from '@workspace/sdk';
 
-export { COMPARISON_OPS, NAMESPACES, STATE_PREDICATES, EVENT_TYPES };
+export { COMPARISON_OPS, NAMESPACES, STATE_PREDICATES, EVENT_TYPES, SCAN_PREDICATES, CANCEL_SCOPES };
 export type { Condition, ComparisonOp };
 
 export interface RuleDraft {
@@ -46,12 +48,62 @@ export function validateDraft(draft: RuleDraft): ValidationIssue[] {
     if (!draft.trigger.scan) issues.push({ field: 'trigger', message: 'Scan predicate is required' });
   }
 
+  if (draft.condition !== null) issues.push(...validateCondition(draft.condition));
+
   if (draft.action.kind === 'create_task') {
     if (!draft.action.queue) issues.push({ field: 'action.queue', message: 'Queue is required' });
     if (!draft.action.template) issues.push({ field: 'action.template', message: 'Template is required' });
     if (!SLA_PATTERN.test(draft.action.sla)) {
       issues.push({ field: 'action.sla', message: SLA_HINT });
     }
+    if (draft.action.priority !== undefined && !Number.isInteger(draft.action.priority)) {
+      issues.push({ field: 'action.priority', message: 'Priority must be a whole number' });
+    }
+  }
+  return issues;
+}
+
+const REF_PATTERN = new RegExp(`^(${NAMESPACES.join('|')})\\.(.+)$`);
+const NUMERIC_OPS: readonly string[] = ['gt', 'lt', 'gte', 'lte'];
+
+/**
+ * The mistakes the engine would only reveal when an event arrives: a reference outside the four
+ * namespaces, a state predicate it does not allowlist, `in` without a list, an ordering comparison
+ * against something that is not a number. Each issue's field carries the node's path.
+ */
+export function validateCondition(c: Condition, path: Path = []): ValidationIssue[] {
+  const field = `condition.${path.join('.')}`;
+  const kind = kindOf(c);
+  if (kind === 'and' || kind === 'or' || kind === 'not') {
+    const children = childrenOf(c);
+    if (children.length === 0) return [{ field, message: 'A group needs at least one condition' }];
+    return children.flatMap((child, i) => validateCondition(child, [...path, i]));
+  }
+  if ('changed' in c) {
+    return c.changed.trim() ? [] : [{ field, message: 'Name the field that must have changed' }];
+  }
+  if ('state' in c) {
+    return (STATE_PREDICATES as readonly string[]).includes(c.state)
+      ? []
+      : [{ field, message: `Unknown state check: ${c.state || '(empty)'}` }];
+  }
+
+  const { op, ref, value } = comparisonParts(c);
+  const issues: ValidationIssue[] = [];
+  const match = REF_PATTERN.exec(ref);
+  if (!match) {
+    issues.push({
+      field,
+      message: `"${ref}" must start with ${NAMESPACES.map((n) => `${n}.`).join(', ')} (for example payload.amount)`,
+    });
+  } else if (match[1] === 'state' && !(STATE_PREDICATES as readonly string[]).includes(match[2]!)) {
+    issues.push({ field, message: `Unknown state value: ${ref}` });
+  }
+  if (op === 'in' && !Array.isArray(value)) {
+    issues.push({ field: `${field}.value`, message: `"in" needs a list, like ["paystub","W2"]` });
+  }
+  if (NUMERIC_OPS.includes(op) && (value === '' || Number.isNaN(Number(value)) || typeof value === 'boolean' || value === null || Array.isArray(value))) {
+    issues.push({ field: `${field}.value`, message: `"${op}" compares numbers; ${literalToText(value) || '(empty)'} is not one` });
   }
   return issues;
 }
@@ -87,6 +139,111 @@ export function removeFromGroup(group: Condition, index: number): Condition {
   return { [key]: children.filter((_, i) => i !== index) } as Condition;
 }
 
+// ---- editing by path ---------------------------------------------------------------------------
+// The editor addresses a node by the child indexes leading to it from the root. A `not` has one
+// child, at index 0. Every function returns a new tree.
+
+export type ConditionKind = 'and' | 'or' | 'not' | 'changed' | 'state' | 'comparison';
+export type Path = readonly number[];
+
+export function kindOf(c: Condition): ConditionKind {
+  if ('and' in c) return 'and';
+  if ('or' in c) return 'or';
+  if ('not' in c) return 'not';
+  if ('changed' in c) return 'changed';
+  if ('state' in c) return 'state';
+  return 'comparison';
+}
+
+export function childrenOf(c: Condition): Condition[] {
+  if ('and' in c) return c.and;
+  if ('or' in c) return c.or;
+  if ('not' in c) return [c.not];
+  return [];
+}
+
+function withChildren(c: Condition, children: Condition[]): Condition {
+  if ('and' in c) return { and: children };
+  if ('or' in c) return { or: children };
+  if ('not' in c) return { not: children[0]! };
+  return c;
+}
+
+export function getAt(root: Condition, path: Path): Condition {
+  return path.reduce((node, i) => childrenOf(node)[i]!, root);
+}
+
+export function replaceAt(root: Condition, path: Path, next: Condition): Condition {
+  if (path.length === 0) return next;
+  const [head, ...rest] = path;
+  return withChildren(
+    root,
+    childrenOf(root).map((child, i) => (i === head ? replaceAt(child, rest, next) : child)),
+  );
+}
+
+/** Remove the node at `path`. Null when nothing is left; a `not` goes when its child goes. */
+export function removeAt(root: Condition, path: Path): Condition | null {
+  if (path.length === 0) return null;
+  const [head, ...rest] = path;
+  const children = childrenOf(root).flatMap((child, i) => {
+    if (i !== head) return [child];
+    const next = removeAt(child, rest);
+    return next === null ? [] : [next];
+  });
+  if ('not' in root && children.length === 0) return null;
+  return withChildren(root, children);
+}
+
+/**
+ * Add a condition at `path`: appended when the node there is a group, otherwise the node and the
+ * new condition become an ALL-of group, so "add another" works on a single condition too.
+ */
+export function addCondition(root: Condition | null, path: Path, child: Condition): Condition {
+  if (root === null) return child;
+  const target = getAt(root, path);
+  return replaceAt(root, path, isGroup(target) ? addToGroup(target, child) : { and: [target, child] });
+}
+
+/** Wrap the node in NOT, or unwrap it if it already is one. */
+export function toggleNot(root: Condition, path: Path): Condition {
+  const target = getAt(root, path);
+  return replaceAt(root, path, 'not' in target ? target.not : { not: target });
+}
+
+export function setGroupOp(root: Condition, path: Path, op: 'and' | 'or'): Condition {
+  const children = childrenOf(getAt(root, path));
+  return replaceAt(root, path, op === 'and' ? { and: children } : { or: children });
+}
+
+// ---- comparisons -------------------------------------------------------------------------------
+
+export function comparisonParts(c: Condition): { op: ComparisonOp; ref: string; value: unknown } {
+  const [op, operands] = Object.entries(c)[0] as [ComparisonOp, [string, unknown]];
+  return { op, ref: operands[0], value: operands[1] };
+}
+
+export function makeComparison(op: ComparisonOp, ref: string, value: unknown): Condition {
+  return { [op]: [ref, value] } as Condition;
+}
+
+/**
+ * What a typed value means: JSON where it parses (500000, true, ["paystub","W2"], "620"), otherwise
+ * the text itself, so a plain word like paystub needs no quotes.
+ */
+export function parseLiteral(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return text;
+  }
+}
+
+/** The inverse of parseLiteral: text that parses back to exactly this value. */
+export function literalToText(value: unknown): string {
+  return typeof value === 'string' && parseLiteral(value) === value ? value : JSON.stringify(value);
+}
+
 /** Human-readable one-line summary of a condition — used in the tree view and diffs. */
 export function describeCondition(c: Condition | null): string {
   if (c === null) return 'always';
@@ -100,6 +257,35 @@ export function describeCondition(c: Condition | null): string {
   if (!entry) return '(empty)';
   const [op, operands] = entry as [string, [string, unknown]];
   return `${operands[0]} ${op} ${JSON.stringify(operands[1])}`;
+}
+
+// ---- describing and loading stored rules -------------------------------------------------------
+
+export function describeTrigger(trigger: unknown): string {
+  const t = (trigger ?? {}) as { type?: string; event?: string; cron?: string; scan?: string };
+  return t.type === 'schedule' ? `on schedule ${t.cron}, for each ${t.scan}` : `when ${t.event}`;
+}
+
+export function describeAction(action: unknown): string {
+  const a = (action ?? {}) as { kind?: string; template?: string; queue?: string; sla?: string; priority?: number; scope?: string };
+  if (a.kind === 'cancel_tasks') return `cancel open tasks for the ${a.scope}`;
+  const priority = a.priority ? `, priority ${a.priority}` : '';
+  return `create "${a.template}" in ${a.queue}, SLA ${a.sla}${priority}`;
+}
+
+/** A stored version as a draft, so an existing rule can be edited instead of retyped. */
+export function draftFromVersion(v: { ruleKey: string; trigger: unknown; condition: unknown; action: unknown }): RuleDraft {
+  return {
+    ruleKey: v.ruleKey,
+    trigger: v.trigger as RuleDraft['trigger'],
+    condition: (v.condition ?? null) as Condition | null,
+    action: v.action as RuleDraft['action'],
+  };
+}
+
+/** R1, R2 … R10, not R1, R10, R11, R2. */
+export function sortRuleKeys(keys: string[]): string[] {
+  return [...keys].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
 }
 
 // ---- version diffing -------------------------------------------------------------------------

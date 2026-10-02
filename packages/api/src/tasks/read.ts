@@ -109,18 +109,31 @@ export interface QueueView {
   strategy: string;
   requiredSkill: string | null;
   active: boolean;
+  /** Open, claimed and blocked tasks waiting in the queue. */
+  activeTasks: number;
 }
 
 export async function listQueues(pool: Pool, tenantId: string): Promise<QueueView[]> {
   return withTenant(pool, tenantId, async (c) => {
-    const r = await c.query<{ name: string; strategy: string; required_skill: string | null; active: boolean }>(
-      `SELECT name, strategy, required_skill, active FROM queues ORDER BY name`,
+    const r = await c.query<{
+      name: string;
+      strategy: string;
+      required_skill: string | null;
+      active: boolean;
+      active_tasks: number;
+    }>(
+      `SELECT q.name, q.strategy, q.required_skill, q.active,
+              (SELECT count(*)::int FROM tasks t
+                WHERE t.queue = q.name AND t.state IN (${ACTIVE_STATES_SQL})) AS active_tasks
+         FROM queues q
+        ORDER BY q.name`,
     );
     return r.rows.map((row) => ({
       name: row.name,
       strategy: row.strategy,
       requiredSkill: row.required_skill,
       active: row.active,
+      activeTasks: row.active_tasks,
     }));
   });
 }

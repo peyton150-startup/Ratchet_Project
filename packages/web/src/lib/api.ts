@@ -24,6 +24,48 @@ export interface EventSummary {
   delta: Record<string, unknown>;
 }
 
+/** One rule evaluated against one trigger. */
+export interface AuditEntry {
+  id: string;
+  ruleKey: string;
+  ruleVersion: number;
+  triggerType: string;
+  eventId: string | null;
+  eventType: string | null;
+  entityId: string | null;
+  matched: boolean;
+  decision: unknown;
+  createdAt: string;
+}
+
+export interface DeadLetter {
+  id: string;
+  source: string;
+  reference: string | null;
+  error: string;
+  attempts: number;
+  payload: unknown;
+  createdAt: string;
+}
+
+export interface Agent {
+  id: string;
+  name: string;
+  skills: string[];
+  capacity: number;
+  load: number;
+  active: boolean;
+  queues: string[];
+}
+
+export interface QueueInfo {
+  name: string;
+  strategy: string;
+  requiredSkill: string | null;
+  active: boolean;
+  activeTasks: number;
+}
+
 /** Turn whatever graphql-ws hands the error sink (GraphQL errors, a CloseEvent, an Error) into text. */
 function describeSubscriptionError(err: unknown): string {
   if (Array.isArray(err)) return (err[0] as { message?: string } | undefined)?.message ?? 'subscription failed';
@@ -160,6 +202,42 @@ export class ConsoleApi {
         { entityId },
       )
       .then((d) => d.events);
+  }
+
+  /**
+   * Rule evaluations, newest first: for one rule, or (taskId) every rule that looked at the event
+   * behind a task.
+   */
+  ruleAudit(filter: { ruleKey?: string; taskId?: string; limit?: number }): Promise<AuditEntry[]> {
+    return this.client
+      .graphql<{ ruleAudit: AuditEntry[] }>(
+        `query($ruleKey: String, $taskId: ID, $limit: Int) {
+           ruleAudit(ruleKey: $ruleKey, taskId: $taskId, limit: $limit) {
+             id ruleKey ruleVersion triggerType eventId eventType entityId matched decision createdAt
+           }
+         }`,
+        filter,
+      )
+      .then((d) => d.ruleAudit);
+  }
+
+  /**
+   * Queues with their waiting counts, and agents with their load. Its own query, apart from
+   * queues(), so the operator's queue list keeps working against an API that predates these fields.
+   */
+  team(): Promise<{ agents: Agent[]; queues: QueueInfo[] }> {
+    return this.client.graphql<{ agents: Agent[]; queues: QueueInfo[] }>(
+      `{ agents { id name skills capacity load active queues }
+         queues { name strategy requiredSkill active activeTasks } }`,
+    );
+  }
+
+  deadLetters(): Promise<DeadLetter[]> {
+    return this.client
+      .graphql<{ deadLetters: DeadLetter[] }>(
+        '{ deadLetters { id source reference error attempts payload createdAt } }',
+      )
+      .then((d) => d.deadLetters);
   }
 
   /** Report the socket's state now and on every change. Returns an unsubscribe function. */

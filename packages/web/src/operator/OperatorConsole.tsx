@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Task, TaskAction } from '@workspace/sdk';
-import type { ConnectionStatus, ConsoleApi, EventSummary } from '../lib/api';
+import type { AuditEntry, ConnectionStatus, ConsoleApi, EventSummary } from '../lib/api';
+import { auditOutcome, auditTrigger } from '../lib/audit';
 import {
   STATE_FILTERS,
   allowedActions,
@@ -178,8 +179,10 @@ export function OperatorConsole({ api }: { api: ConsoleApi }) {
       ) : null}
 
       <div style={{ display: 'flex', gap: tokens.space(4), marginTop: tokens.space(4) }}>
-        <div style={{ flex: 2, minWidth: 0 }}>
-          <Card>
+        {/* Scrolls sideways within itself: on a narrow window the table is wider than its share of
+            the row, and would otherwise run underneath the detail panel. */}
+        <div style={{ flex: 2, minWidth: 0, overflowX: 'auto' }}>
+          <Card style={{ minWidth: 'min-content' }}>
             {tasks.length === 0 ? (
               <EmptyState>
                 {stateFilter === 'active' ? 'No tasks in this queue.' : `No ${stateFilter} tasks in this queue.`}
@@ -262,6 +265,23 @@ function TaskDetail({ api, task, onCancel }: { api: ConsoleApi; task: Task; onCa
     api.events(entityId).then(setEvents).catch(() => setEvents([]));
   }, [api, entityId]);
 
+  // Every rule that looked at the event behind this task. Empty for a task from a scheduled sweep,
+  // and when the request fails: the heading below still says which rule created the task.
+  const [evaluations, setEvaluations] = useState<AuditEntry[]>([]);
+  useEffect(() => {
+    let stale = false;
+    setEvaluations([]);
+    api
+      .ruleAudit({ taskId: task.id })
+      .then((rows) => {
+        if (!stale) setEvaluations(rows);
+      })
+      .catch(() => {});
+    return () => {
+      stale = true;
+    };
+  }, [api, task.id]);
+
   // A half-confirmed cancel must not carry over to another task, or survive a state change.
   useEffect(() => setConfirmingCancel(false), [task.id, task.state]);
 
@@ -301,6 +321,30 @@ function TaskDetail({ api, task, onCancel }: { api: ConsoleApi; task: Task; onCa
             </Button>
           )}
         </div>
+      ) : null}
+
+      <div style={{ fontWeight: 600, margin: `${tokens.space(4)} 0 ${tokens.space(2)}` }}>Why this task exists</div>
+      <div style={{ fontSize: '13px' }}>
+        Created by {task.ruleKey} v{task.ruleVersion}
+        {evaluations[0] ? ` from ${auditTrigger(evaluations[0])}` : ''}.
+      </div>
+      {evaluations.length > 0 ? (
+        <ul style={{ listStyle: 'none', padding: 0, margin: `${tokens.space(2)} 0 0`, fontSize: '13px' }}>
+          {evaluations.map((e) => (
+            <li
+              key={e.id}
+              style={{
+                padding: `${tokens.space(1)} 0`,
+                color: e.matched ? tokens.color.text : tokens.color.textMuted,
+              }}
+            >
+              <strong>
+                {e.ruleKey} v{e.ruleVersion}
+              </strong>{' '}
+              {auditOutcome(e)}
+            </li>
+          ))}
+        </ul>
       ) : null}
 
       <div style={{ fontWeight: 600, margin: `${tokens.space(4)} 0 ${tokens.space(2)}` }}>Event history</div>

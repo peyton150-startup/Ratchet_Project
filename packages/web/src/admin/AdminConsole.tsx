@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { entityTypeFor } from '@workspace/sdk';
-import type { ConsoleApi, RuleVersion } from '../lib/api';
+import type { AuditEntry, ConsoleApi, RuleVersion } from '../lib/api';
+import { auditOutcome, auditTrigger } from '../lib/audit';
 import { parseJsonObject, sampleFor, type EventType } from '../lib/events';
 import {
   CANCEL_SCOPES,
@@ -268,7 +269,7 @@ export function AdminConsole({ api }: { api: ConsoleApi }) {
         </div>
 
         <div style={{ flex: 2, minWidth: 0 }}>
-          <VersionHistory versions={selectedVersions} />
+          <VersionHistory api={api} versions={selectedVersions} />
         </div>
       </div>
     </PageShell>
@@ -473,7 +474,55 @@ function CreateTaskFields({
   );
 }
 
-function VersionHistory({ versions }: { versions: RuleVersion[] }) {
+/** What the rule has done lately: each trigger it looked at, and whether it matched. */
+function RuleDecisions({ api, ruleKey, refreshOn }: { api: ConsoleApi; ruleKey: string; refreshOn: number }) {
+  // null: not loaded, or the request failed (a key without rules:read, an older API).
+  const [entries, setEntries] = useState<AuditEntry[] | null>(null);
+
+  useEffect(() => {
+    let stale = false;
+    setEntries(null);
+    api
+      .ruleAudit({ ruleKey, limit: 10 })
+      .then((rows) => {
+        if (!stale) setEntries(rows);
+      })
+      .catch(() => {});
+    return () => {
+      stale = true;
+    };
+  }, [api, ruleKey, refreshOn]);
+
+  if (entries === null) return null;
+  return (
+    <div style={{ marginTop: tokens.space(3) }}>
+      <Card>
+        <div style={{ fontWeight: 600, marginBottom: tokens.space(2) }}>Recent decisions</div>
+        {entries.length === 0 ? (
+          <div style={mutedNote}>No event has reached this rule yet.</div>
+        ) : (
+          <ul style={{ listStyle: 'none', padding: 0, margin: 0, fontSize: '13px' }}>
+            {entries.map((e) => (
+              <li key={e.id} style={{ borderTop: `1px solid ${tokens.color.border}`, padding: `${tokens.space(2)} 0` }}>
+                <Toolbar>
+                  <Badge tone={e.matched ? 'ok' : 'neutral'}>{e.matched ? 'fired' : 'no match'}</Badge>
+                  <span>
+                    v{e.ruleVersion} {auditOutcome(e)}
+                  </span>
+                </Toolbar>
+                <div style={{ ...mutedNote, marginTop: tokens.space(1) }}>
+                  {auditTrigger(e)} · {new Date(e.createdAt).toLocaleString()}
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+function VersionHistory({ api, versions }: { api: ConsoleApi; versions: RuleVersion[] }) {
   if (versions.length === 0) {
     return (
       <Card>
@@ -542,6 +591,9 @@ function VersionHistory({ versions }: { versions: RuleVersion[] }) {
           })}
         </Card>
       </div>
+
+      {/* Refetched when a version is published, so a new version's decisions appear under it. */}
+      <RuleDecisions api={api} ruleKey={current.ruleKey} refreshOn={versions.length} />
     </>
   );
 }

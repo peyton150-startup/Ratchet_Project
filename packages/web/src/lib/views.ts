@@ -7,6 +7,7 @@ export const VIEWS = [
   { id: 'admin', label: 'Admin', needs: 'rules:write' },
   { id: 'events', label: 'Send event', needs: 'events:ingest' },
   { id: 'webhooks', label: 'Webhooks', needs: 'webhooks:manage' },
+  { id: 'ops', label: 'Operations', needs: 'ops:read' },
 ] as const;
 
 export type View = (typeof VIEWS)[number];

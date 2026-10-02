@@ -6,6 +6,7 @@ import { OperatorConsole } from './operator/OperatorConsole';
 import { AdminConsole } from './admin/AdminConsole';
 import { EventConsole } from './events/EventConsole';
 import { WebhooksConsole } from './webhooks/WebhooksConsole';
+import { OperationsConsole } from './ops/OperationsConsole';
 import { visibleViews, type ViewId } from './lib/views';
 import { Badge, Button, Card, PageShell, tokens } from './components';
 
@@ -154,6 +155,7 @@ function ConsoleSwitcher({ apiKey, onSignOut }: { apiKey: string; onSignOut: () 
       {view === 'operator' ? <OperatorConsole api={api} /> : null}
       {view === 'admin' ? <AdminConsole api={api} /> : null}
       {view === 'webhooks' ? <WebhooksConsole api={api} /> : null}
+      {view === 'ops' ? <OperationsConsole api={api} /> : null}
       {/* Kept mounted: the form and the log of what was sent survive a trip to the Operator view. */}
       {views.some((v) => v.id === 'events') ? (
         <div style={{ display: view === 'events' ? 'block' : 'none' }}>

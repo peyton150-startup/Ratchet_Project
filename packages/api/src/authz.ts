@@ -10,7 +10,8 @@ export type Permission =
   | 'rules:read' // view rules
   | 'rules:write' // create/version/edit rules, dry-run
   | 'queues:manage' // manage agents, queues, membership
-  | 'webhooks:manage'; // register/list webhook endpoints
+  | 'webhooks:manage' // register/list webhook endpoints
+  | 'ops:read'; // view dead letters: system health, not an operator's or integrator's concern
 
 const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
   integrator: ['events:ingest', 'webhooks:manage'],
@@ -23,6 +24,7 @@ const ROLE_PERMISSIONS: Record<Role, readonly Permission[]> = {
     'rules:write',
     'queues:manage',
     'webhooks:manage',
+    'ops:read',
   ],
 };
 

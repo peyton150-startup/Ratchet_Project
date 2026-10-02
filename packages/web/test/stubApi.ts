@@ -8,7 +8,16 @@ import {
   type Webhook,
   type WebhookDelivery,
 } from '@workspace/sdk';
-import type { ConnectionStatus, ConsoleApi, EventSummary, RuleVersion } from '../src/lib/api';
+import type {
+  Agent,
+  AuditEntry,
+  ConnectionStatus,
+  ConsoleApi,
+  DeadLetter,
+  EventSummary,
+  QueueInfo,
+  RuleVersion,
+} from '../src/lib/api';
 
 export function makeTask(overrides: Partial<Task> = {}): Task {
   return {
@@ -38,6 +47,13 @@ export interface StubOptions {
   ingestError?: { status: number; message: string };
   /** Make reading rules fail, as it does for a key without rules:read. */
   rulesForbidden?: boolean;
+  /** Rule audit rows; each ruleAudit call returns those matching its ruleKey filter, if any. */
+  audit?: AuditEntry[];
+  agents?: Agent[];
+  queueInfo?: QueueInfo[];
+  deadLetters?: DeadLetter[];
+  /** Make reading dead letters fail, as it does without ops:read. */
+  deadLettersForbidden?: boolean;
   webhooks?: Webhook[];
   /** Delivery log per webhook id. */
   deliveries?: Record<string, WebhookDelivery[]>;
@@ -56,6 +72,8 @@ export interface StubApi {
     ingested: EventInput[];
     registered: Array<{ url: string; events: string[] }>;
     setActive: Array<{ id: string; active: boolean }>;
+    auditFilters: Array<{ ruleKey?: string; taskId?: string; limit?: number }>;
+    teamReads: number;
   };
   /** Push a task through the subscription, as the server would. */
   pushUpdate: (task: Task) => void;
@@ -79,6 +97,8 @@ export function stubApi(opts: StubOptions = {}): StubApi {
     ingested: [],
     registered: [],
     setActive: [],
+    auditFilters: [],
+    teamReads: 0,
   };
   let webhooks = opts.webhooks ?? [];
   const seenKeys = new Map<string, string>();
@@ -114,6 +134,18 @@ export function stubApi(opts: StubOptions = {}): StubApi {
     rules: async () => {
       if (opts.rulesForbidden) throw new RatchetError('forbidden', 200);
       return opts.rules ?? [];
+    },
+    ruleAudit: async (filter: { ruleKey?: string; taskId?: string; limit?: number }) => {
+      calls.auditFilters.push(filter);
+      return (opts.audit ?? []).filter((a) => !filter.ruleKey || a.ruleKey === filter.ruleKey);
+    },
+    team: async () => {
+      calls.teamReads += 1;
+      return { agents: opts.agents ?? [], queues: opts.queueInfo ?? [] };
+    },
+    deadLetters: async () => {
+      if (opts.deadLettersForbidden) throw new RatchetError('forbidden', 200);
+      return opts.deadLetters ?? [];
     },
     webhooks: async () => webhooks,
     registerWebhook: async (input: { url: string; events: string[] }) => {

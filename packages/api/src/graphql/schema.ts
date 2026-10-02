@@ -3,6 +3,7 @@ import { makeExecutableSchema } from '@graphql-tools/schema';
 import { listTasks, getTask, listQueues } from '../tasks/read.js';
 import { listEventsForEntity } from '../events/read.js';
 import { listRuleVersions, createRuleVersion } from '../rules/read.js';
+import { listAgents, listDeadLetters, listRuleAudit } from '../ops/read.js';
 import { ruleSchema } from '../rules/types.js';
 import { RulesEngine } from '../rules/engine.js';
 import { TaskService } from '../tasks/service.js';
@@ -36,6 +37,45 @@ const typeDefs = /* GraphQL */ `
     strategy: String!
     requiredSkill: String
     active: Boolean!
+    "Open, claimed and blocked tasks waiting in the queue."
+    activeTasks: Int!
+  }
+
+  "An assignment target. load counts the active tasks routed to it, measured against capacity."
+  type Agent {
+    id: ID!
+    name: String!
+    skills: [String!]!
+    capacity: Int!
+    load: Int!
+    active: Boolean!
+    queues: [String!]!
+    lastAssignedAt: DateTime
+  }
+
+  "One rule evaluated against one trigger: which version looked, and whether it matched."
+  type RuleAuditEntry {
+    id: ID!
+    ruleKey: String!
+    ruleVersion: Int!
+    triggerType: String!
+    eventId: ID
+    eventType: String
+    entityId: String
+    matched: Boolean!
+    decision: JSON
+    createdAt: DateTime!
+  }
+
+  "A message that exhausted its retries."
+  type DeadLetter {
+    id: ID!
+    source: String!
+    reference: String
+    error: String!
+    attempts: Int!
+    payload: JSON!
+    createdAt: DateTime!
   }
 
   type Event {
@@ -87,6 +127,10 @@ const typeDefs = /* GraphQL */ `
     events(entityId: String!, limit: Int): [Event!]!
     "All stored rule versions (including superseded ones) for the admin console's history + diffs."
     rules(ruleKey: String): [RuleVersion!]!
+    agents: [Agent!]!
+    "Rule evaluations, newest first. taskId selects every rule evaluated for the event that created that task."
+    ruleAudit(ruleKey: String, eventId: ID, taskId: ID, limit: Int): [RuleAuditEntry!]!
+    deadLetters(limit: Int): [DeadLetter!]!
   }
 
   type Mutation {
@@ -177,6 +221,22 @@ const resolvers = {
     rules: (_p: unknown, args: { ruleKey?: string }, ctx: GraphQLContext) => {
       const tenantId = requirePermission(ctx, 'rules:read');
       return listRuleVersions(ctx.pool, tenantId, args.ruleKey);
+    },
+    agents: (_p: unknown, _a: unknown, ctx: GraphQLContext) => {
+      const tenantId = requirePermission(ctx, 'tasks:read');
+      return listAgents(ctx.pool, tenantId);
+    },
+    ruleAudit: (
+      _p: unknown,
+      args: { ruleKey?: string; eventId?: string; taskId?: string; limit?: number },
+      ctx: GraphQLContext,
+    ) => {
+      const tenantId = requirePermission(ctx, 'rules:read');
+      return listRuleAudit(ctx.pool, tenantId, args);
+    },
+    deadLetters: (_p: unknown, args: { limit?: number }, ctx: GraphQLContext) => {
+      const tenantId = requirePermission(ctx, 'ops:read');
+      return listDeadLetters(ctx.pool, tenantId, args.limit);
     },
   },
   Mutation: {

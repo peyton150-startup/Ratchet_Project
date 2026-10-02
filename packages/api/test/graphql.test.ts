@@ -12,6 +12,36 @@ import {
   type RunningServer,
 } from './helpers';
 
+/** Insert an event and return its id, for audit rows that point at it. */
+async function seedEventRow(tenantId: string, type: string, entityId: string): Promise<string> {
+  const r = await adminPool.query<{ id: string }>(
+    `INSERT INTO events (tenant_id, event_type, entity_type, entity_id, payload)
+     VALUES ($1, $2, 'LoanApplication', $3, '{}') RETURNING id`,
+    [tenantId, type, entityId],
+  );
+  return r.rows[0]!.id;
+}
+
+async function seedAudit(
+  tenantId: string,
+  row: { ruleKey: string; eventId: string | null; matched: boolean; dryRun?: boolean; ageMinutes?: number },
+): Promise<void> {
+  await adminPool.query(
+    `INSERT INTO rule_audit (tenant_id, rule_key, rule_version, trigger_type, event_id, matched, decision, dry_run, created_at)
+     VALUES ($1, $2, 1, $3, $4, $5, $6, $7, now() - make_interval(mins => $8))`,
+    [
+      tenantId,
+      row.ruleKey,
+      row.eventId ? 'event' : 'schedule',
+      row.eventId,
+      row.matched,
+      row.matched ? JSON.stringify({ ruleKey: row.ruleKey }) : null,
+      row.dryRun ?? false,
+      row.ageMinutes ?? 0,
+    ],
+  );
+}
+
 let server: RunningServer;
 
 before(async () => {
@@ -321,4 +351,117 @@ test('HTTP /graphql endpoint works end-to-end with auth', async () => {
   const body = (await resp.json()) as ExecResult;
   assert.equal(body.errors, undefined);
   assert.equal((body.data!['tasks'] as unknown[]).length, 1);
+});
+
+test('ruleAudit explains a task: every rule evaluated for the event that created it', async () => {
+  const t = await seedTenant('gql-audit');
+  const ctx = { pool: appPool, tenantId: t.tenantId, role: 'operator' };
+  const eventId = await seedEventRow(t.tenantId, 'application.submitted', 'app-audit');
+  const otherEvent = await seedEventRow(t.tenantId, 'application.submitted', 'app-other');
+  await seedAudit(t.tenantId, { ruleKey: 'R1', eventId, matched: true });
+  await seedAudit(t.tenantId, { ruleKey: 'R2', eventId, matched: false });
+  await seedAudit(t.tenantId, { ruleKey: 'R1', eventId: otherEvent, matched: true, ageMinutes: 5 });
+  await seedAudit(t.tenantId, { ruleKey: 'R1', eventId, matched: true, dryRun: true });
+
+  const task = await adminPool.query<{ id: string }>(
+    `INSERT INTO tasks (tenant_id, dedup_key, rule_key, rule_version, event_id, queue, template)
+     VALUES ($1, $2, 'R1', 1, $3, 'intake', 'tpl') RETURNING id`,
+    [t.tenantId, randomUUID(), eventId],
+  );
+  const scheduled = await seedTask(t.tenantId); // no event behind it
+
+  const fields = '{ ruleKey ruleVersion matched eventType entityId decision }';
+  const forTask = await exec(`query($id: ID!) { ruleAudit(taskId: $id) ${fields} }`, ctx, { id: task.rows[0]!.id });
+  assert.equal(forTask.errors, undefined);
+  const rows = forTask.data!['ruleAudit'] as Array<{ ruleKey: string; matched: boolean; eventType: string; entityId: string }>;
+  // Sorted here because these rows were seeded one statement at a time; the engine writes an
+  // event's audit rows in a single batch, so in practice they share a timestamp.
+  assert.deepEqual(
+    rows.map((r) => [r.ruleKey, r.matched]).sort(),
+    [
+      ['R1', true],
+      ['R2', false],
+    ],
+    'both rules that looked at the event, and no dry-run row',
+  );
+  assert.equal(rows[0]!.eventType, 'application.submitted');
+  assert.equal(rows[0]!.entityId, 'app-audit');
+
+  const none = await exec(`query($id: ID!) { ruleAudit(taskId: $id) ${fields} }`, ctx, { id: scheduled });
+  assert.deepEqual(none.data!['ruleAudit'], [], 'a task with no event has no evaluations to show');
+
+  const byRule = await exec(`{ ruleAudit(ruleKey: "R1") ${fields} }`, ctx);
+  assert.equal((byRule.data!['ruleAudit'] as unknown[]).length, 2, 'R1 across both events, newest first');
+  assert.equal((byRule.data!['ruleAudit'] as Array<{ entityId: string }>)[0]!.entityId, 'app-audit');
+
+  // An id that is not a uuid matches nothing instead of failing the query.
+  const bad = await exec(`{ ruleAudit(taskId: "nope") ${fields} }`, ctx);
+  assert.equal(bad.errors, undefined);
+  assert.deepEqual(bad.data!['ruleAudit'], []);
+
+  const forbidden = await exec(`{ ruleAudit ${fields} }`, { ...ctx, role: 'integrator' });
+  assert.equal(forbidden.errors?.[0]?.extensions?.code, 'FORBIDDEN');
+});
+
+test('deadLetters lists exhausted messages for admins only', async () => {
+  const t = await seedTenant('gql-dlq');
+  await adminPool.query(
+    `INSERT INTO dead_letter (tenant_id, source, reference, payload, error, attempts, created_at)
+     VALUES ($1, 'pipeline', 'evt-old', '{"a":1}', 'boom', 3, now() - interval '1 hour'),
+            ($1, 'pipeline', 'evt-new', '{"a":2}', 'still boom', 3, now())`,
+    [t.tenantId],
+  );
+
+  const res = await exec('{ deadLetters { source reference error attempts payload } }', {
+    pool: appPool,
+    tenantId: t.tenantId,
+    role: 'admin',
+  });
+  assert.equal(res.errors, undefined);
+  const rows = res.data!['deadLetters'] as Array<{ reference: string; payload: unknown }>;
+  assert.deepEqual(
+    rows.map((r) => r.reference),
+    ['evt-new', 'evt-old'],
+  );
+  assert.deepEqual(rows[0]!.payload, { a: 2 });
+
+  const operator = await exec('{ deadLetters { id } }', { pool: appPool, tenantId: t.tenantId, role: 'operator' });
+  assert.equal(operator.errors?.[0]?.extensions?.code, 'FORBIDDEN');
+});
+
+test('agents and queues report who work is routed to and how loaded they are', async () => {
+  const t = await seedTenant('gql-team');
+  const ctx = { pool: appPool, tenantId: t.tenantId, role: 'operator' };
+  const agent = await adminPool.query<{ id: string }>(
+    "INSERT INTO agents (tenant_id, name, skills, capacity) VALUES ($1, 'Ava Intake', '{intake}', 8) RETURNING id",
+    [t.tenantId],
+  );
+  const agentId = agent.rows[0]!.id;
+  await adminPool.query("INSERT INTO agents (tenant_id, name, active) VALUES ($1, 'Zed Idle', false)", [t.tenantId]);
+  await adminPool.query(
+    "INSERT INTO queues (tenant_id, name, strategy) VALUES ($1, 'intake', 'round_robin'), ($1, 'processing', 'capacity')",
+    [t.tenantId],
+  );
+  await adminPool.query(
+    "INSERT INTO queue_members (tenant_id, queue, agent_id) VALUES ($1, 'processing', $2), ($1, 'intake', $2)",
+    [t.tenantId, agentId],
+  );
+  // Two active tasks and one finished one: only the active two count as load.
+  for (const state of ['open', 'claimed', 'completed']) {
+    const id = await seedTask(t.tenantId, 'intake', state);
+    await adminPool.query('UPDATE tasks SET assignee = $2 WHERE id = $1', [id, agentId]);
+  }
+
+  const res = await exec('{ agents { name skills capacity load active queues } queues { name strategy activeTasks } }', ctx);
+  assert.equal(res.errors, undefined);
+  // graphql-js returns null-prototype objects; round-trip so deepEqual compares plain ones.
+  const data = JSON.parse(JSON.stringify(res.data)) as Record<string, unknown>;
+  assert.deepEqual(data['agents'], [
+    { name: 'Ava Intake', skills: ['intake'], capacity: 8, load: 2, active: true, queues: ['intake', 'processing'] },
+    { name: 'Zed Idle', skills: [], capacity: 5, load: 0, active: false, queues: [] },
+  ]);
+  assert.deepEqual(data['queues'], [
+    { name: 'intake', strategy: 'round_robin', activeTasks: 2 },
+    { name: 'processing', strategy: 'capacity', activeTasks: 0 },
+  ]);
 });

@@ -23,6 +23,8 @@ const typeDefs = /* GraphQL */ `
     priority: Int!
     state: String!
     assignee: ID
+    "Name of the agent the task is routed to, when it has one."
+    assigneeName: String
     slaDueAt: DateTime
     subject: JSON!
     createdAt: DateTime!
@@ -70,7 +72,8 @@ const typeDefs = /* GraphQL */ `
   }
 
   type Query {
-    tasks(queue: String, state: String, limit: Int): [Task!]!
+    "activeOnly keeps only tasks that can still be worked (open, claimed, blocked)."
+    tasks(queue: String, state: String, activeOnly: Boolean, limit: Int): [Task!]!
     task(id: ID!): Task
     queues: [Queue!]!
     "Event history for one entity, newest first — powers the console task-detail view."
@@ -83,6 +86,9 @@ const typeDefs = /* GraphQL */ `
     claimTask(id: ID!): Task!
     completeTask(id: ID!): Task!
     blockTask(id: ID!): Task!
+    unblockTask(id: ID!): Task!
+    releaseTask(id: ID!): Task!
+    cancelTask(id: ID!): Task!
     assignTask(id: ID!): Task!
     "Publish the next version of a rule (supersedes the previous active version)."
     createRuleVersion(input: RuleVersionInput!): RuleVersion!
@@ -135,9 +141,18 @@ const resolvers = {
   DateTime: dateTime,
   JSON: json,
   Query: {
-    tasks: (_p: unknown, args: { queue?: string; state?: string; limit?: number }, ctx: GraphQLContext) => {
+    tasks: (
+      _p: unknown,
+      args: { queue?: string; state?: string; activeOnly?: boolean; limit?: number },
+      ctx: GraphQLContext,
+    ) => {
       const tenantId = requirePermission(ctx, 'tasks:read');
-      return listTasks(ctx.pool, tenantId, { queue: args.queue, state: args.state, limit: args.limit });
+      return listTasks(ctx.pool, tenantId, {
+        queue: args.queue,
+        state: args.state,
+        activeOnly: args.activeOnly ?? false,
+        limit: args.limit,
+      });
     },
     task: (_p: unknown, args: { id: string }, ctx: GraphQLContext) => {
       const tenantId = requirePermission(ctx, 'tasks:read');
@@ -160,6 +175,9 @@ const resolvers = {
     claimTask: (_p: unknown, args: { id: string }, ctx: GraphQLContext) => transitionMutation(ctx, args.id, 'claim'),
     completeTask: (_p: unknown, args: { id: string }, ctx: GraphQLContext) => transitionMutation(ctx, args.id, 'complete'),
     blockTask: (_p: unknown, args: { id: string }, ctx: GraphQLContext) => transitionMutation(ctx, args.id, 'block'),
+    unblockTask: (_p: unknown, args: { id: string }, ctx: GraphQLContext) => transitionMutation(ctx, args.id, 'unblock'),
+    releaseTask: (_p: unknown, args: { id: string }, ctx: GraphQLContext) => transitionMutation(ctx, args.id, 'release'),
+    cancelTask: (_p: unknown, args: { id: string }, ctx: GraphQLContext) => transitionMutation(ctx, args.id, 'cancel'),
     assignTask: async (_p: unknown, args: { id: string }, ctx: GraphQLContext) => {
       const tenantId = requirePermission(ctx, 'tasks:work');
       const res = await new RoutingService(ctx.pool).assign(tenantId, args.id);

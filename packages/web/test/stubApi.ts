@@ -1,5 +1,5 @@
-import type { Task } from '@workspace/sdk';
-import type { ConsoleApi, RuleVersion } from '../src/lib/api';
+import { transitionTarget, type Task, type TaskAction, type TaskFilter } from '@workspace/sdk';
+import type { ConnectionStatus, ConsoleApi, EventSummary, RuleVersion } from '../src/lib/api';
 
 export function makeTask(overrides: Partial<Task> = {}): Task {
   return {
@@ -11,6 +11,7 @@ export function makeTask(overrides: Partial<Task> = {}): Task {
     priority: 0,
     state: 'open',
     assignee: null,
+    assigneeName: null,
     slaDueAt: null,
     subject: { entityId: 'app-1' },
     createdAt: '2026-01-01T00:00:00.000Z',
@@ -23,13 +24,23 @@ export interface StubOptions {
   tasks?: Task[];
   queues?: string[];
   rules?: RuleVersion[];
+  events?: EventSummary[];
 }
 
 export interface StubApi {
   api: ConsoleApi;
-  calls: { act: Array<{ action: string; id: string }>; created: unknown[]; dryRuns: unknown[] };
+  calls: {
+    act: Array<{ action: string; id: string }>;
+    created: unknown[];
+    dryRuns: unknown[];
+    taskFilters: TaskFilter[];
+  };
   /** Push a task through the subscription, as the server would. */
   pushUpdate: (task: Task) => void;
+  /** Move the live-updates socket to a new state, as graphql-ws would report it. */
+  setConnection: (status: ConnectionStatus) => void;
+  /** Fail the subscription, as a rejected key or a dropped socket would. */
+  failSubscription: (message: string) => void;
 }
 
 /**
@@ -37,21 +48,36 @@ export interface StubApi {
  * a live server, so they assert on rendering and interaction, not transport.
  */
 export function stubApi(opts: StubOptions = {}): StubApi {
-  const calls: StubApi['calls'] = { act: [], created: [], dryRuns: [] };
+  const calls: StubApi['calls'] = { act: [], created: [], dryRuns: [], taskFilters: [] };
   let subscriber: ((t: Task) => void) | null = null;
+  let subscriptionError: ((message: string) => void) | null = null;
+  let statusListener: ((s: ConnectionStatus) => void) | null = null;
   let tasks = opts.tasks ?? [];
 
   const api = {
-    tasks: async () => tasks,
+    tasks: async (filter: TaskFilter = {}) => {
+      calls.taskFilters.push(filter);
+      return tasks;
+    },
     queues: async () => (opts.queues ?? ['intake']).map((name) => ({ name, strategy: 'round_robin', active: true })),
-    act: async (action: 'claim' | 'complete' | 'block', id: string) => {
+    act: async (action: TaskAction, id: string) => {
       calls.act.push({ action, id });
-      const nextState = action === 'claim' ? 'claimed' : action === 'complete' ? 'completed' : 'blocked';
-      const updated = { ...tasks.find((t) => t.id === id)!, state: nextState };
+      const current = tasks.find((t) => t.id === id)!;
+      // The shared transition table, so the stub cannot accept what the server would reject.
+      const nextState = transitionTarget(current.state, action);
+      if (nextState === null) throw new Error(`illegal transition from ${current.state}: ${action}`);
+      const updated = { ...current, state: nextState };
       tasks = tasks.map((t) => (t.id === id ? updated : t));
       return updated;
     },
-    events: async () => [],
+    events: async () => opts.events ?? [],
+    onConnectionStatus: (listener: (s: ConnectionStatus) => void) => {
+      statusListener = listener;
+      listener('connecting');
+      return () => {
+        statusListener = null;
+      };
+    },
     rules: async () => opts.rules ?? [],
     createRuleVersion: async (draft: unknown) => {
       calls.created.push(draft);
@@ -61,14 +87,26 @@ export function stubApi(opts: StubOptions = {}): StubApi {
       calls.dryRuns.push(rule);
       return { matched: true, decision: { ruleKey: 'R1' } };
     },
-    subscribeToQueue: (_queue: string | undefined, onTask: (t: Task) => void) => {
+    subscribeToQueue: (
+      _queue: string | undefined,
+      onTask: (t: Task) => void,
+      onError?: (message: string) => void,
+    ) => {
       subscriber = onTask;
+      subscriptionError = onError ?? null;
       return () => {
         subscriber = null;
+        subscriptionError = null;
       };
     },
     dispose: () => {},
   } as unknown as ConsoleApi;
 
-  return { api, calls, pushUpdate: (t) => subscriber?.(t) };
+  return {
+    api,
+    calls,
+    pushUpdate: (t) => subscriber?.(t),
+    setConnection: (status) => statusListener?.(status),
+    failSubscription: (message) => subscriptionError?.(message),
+  };
 }

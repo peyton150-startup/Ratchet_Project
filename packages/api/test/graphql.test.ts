@@ -92,6 +92,79 @@ test('an illegal transition surfaces as a GraphQL error', async () => {
   assert.equal(res.errors[0]!.extensions?.code, 'ILLEGAL_TRANSITION');
 });
 
+test('unblock, release and cancel are reachable through the API', async () => {
+  const t = await seedTenant('gql-lifecycle');
+  const ctx = { pool: appPool, tenantId: t.tenantId, role: 'operator' };
+  const run = async (field: string, id: string): Promise<ExecResult> =>
+    exec(`mutation($id: ID!) { ${field}(id: $id) { state } }`, ctx, { id });
+
+  const blocked = await seedTask(t.tenantId, 'intake', 'blocked');
+  const unblocked = await run('unblockTask', blocked);
+  assert.equal(unblocked.errors, undefined);
+  assert.equal((unblocked.data!['unblockTask'] as { state: string }).state, 'claimed');
+
+  const released = await run('releaseTask', blocked);
+  assert.equal((released.data!['releaseTask'] as { state: string }).state, 'open');
+
+  const cancelled = await run('cancelTask', blocked);
+  assert.equal((cancelled.data!['cancelTask'] as { state: string }).state, 'cancelled');
+
+  // Terminal: the shared transition table, not the resolver, decides this is illegal.
+  const again = await run('unblockTask', blocked);
+  assert.equal(again.errors?.[0]?.extensions?.code, 'ILLEGAL_TRANSITION');
+});
+
+test('lifecycle mutations require tasks:work', async () => {
+  const t = await seedTenant('gql-lifecycle-rbac');
+  const id = await seedTask(t.tenantId);
+  const res = await exec(
+    'mutation($id: ID!) { cancelTask(id: $id) { state } }',
+    { pool: appPool, tenantId: t.tenantId, role: 'integrator' },
+    { id },
+  );
+  assert.equal(res.errors?.[0]?.extensions?.code, 'FORBIDDEN');
+});
+
+test('tasks(activeOnly) leaves out completed and cancelled tasks', async () => {
+  const t = await seedTenant('gql-active-only');
+  const ctx = { pool: appPool, tenantId: t.tenantId, role: 'operator' };
+  for (const state of ['open', 'claimed', 'blocked', 'completed', 'cancelled']) {
+    await seedTask(t.tenantId, 'intake', state);
+  }
+
+  const active = await exec('{ tasks(activeOnly: true) { state } }', ctx);
+  assert.equal(active.errors, undefined);
+  const states = (active.data!['tasks'] as Array<{ state: string }>).map((x) => x.state).sort();
+  assert.deepEqual(states, ['blocked', 'claimed', 'open']);
+
+  const all = await exec('{ tasks { state } }', ctx);
+  assert.equal((all.data!['tasks'] as unknown[]).length, 5, 'the default still returns every state');
+});
+
+test('a task carries the name of its assigned agent', async () => {
+  const t = await seedTenant('gql-assignee-name');
+  const ctx = { pool: appPool, tenantId: t.tenantId, role: 'operator' };
+  const agent = await adminPool.query<{ id: string }>(
+    "INSERT INTO agents (tenant_id, name) VALUES ($1, 'Ava Intake') RETURNING id",
+    [t.tenantId],
+  );
+  const assigned = await seedTask(t.tenantId);
+  await adminPool.query('UPDATE tasks SET assignee = $2 WHERE id = $1', [assigned, agent.rows[0]!.id]);
+  const unassigned = await seedTask(t.tenantId);
+
+  const res = await exec('{ tasks { id assigneeName } }', ctx);
+  assert.equal(res.errors, undefined);
+  const byId = new Map(
+    (res.data!['tasks'] as Array<{ id: string; assigneeName: string | null }>).map((x) => [x.id, x.assigneeName]),
+  );
+  assert.equal(byId.get(assigned), 'Ava Intake');
+  assert.equal(byId.get(unassigned), null);
+
+  // The single-task read (used after every mutation and by the worker's publish) carries it too.
+  const one = await exec('query($id: ID!) { task(id: $id) { assigneeName } }', ctx, { id: assigned });
+  assert.equal((one.data!['task'] as { assigneeName: string }).assigneeName, 'Ava Intake');
+});
+
 test('assignTask routes a task to an eligible agent', async () => {
   const t = await seedTenant('gql-assign');
   const agent = await adminPool.query<{ id: string }>(

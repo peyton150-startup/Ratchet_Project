@@ -9,6 +9,9 @@ import {
   applyTaskUpdate,
   sortTasks,
   countByState,
+  matchesStateFilter,
+  rowActions,
+  assigneeLabel,
 } from './tasks';
 
 function task(overrides: Partial<Task> = {}): Task {
@@ -21,6 +24,7 @@ function task(overrides: Partial<Task> = {}): Task {
     priority: 0,
     state: 'open',
     assignee: null,
+    assigneeName: null,
     slaDueAt: null,
     subject: {},
     createdAt: '2026-01-01T00:00:00.000Z',
@@ -91,4 +95,34 @@ test('countByState tallies queue composition', () => {
     task({ id: '3', state: 'claimed' }),
   ]);
   assert.deepEqual(counts, { open: 2, claimed: 1 });
+});
+
+test('rowActions offers every legal action except cancel', () => {
+  assert.deepEqual(rowActions('open'), ['claim']);
+  assert.deepEqual(rowActions('claimed'), ['complete', 'block', 'release']);
+  // A blocked task used to be a dead end: the row offered nothing.
+  assert.deepEqual(rowActions('blocked'), ['unblock']);
+  assert.deepEqual(rowActions('completed'), []);
+});
+
+test('matchesStateFilter: active means still workable', () => {
+  assert.equal(matchesStateFilter(task({ state: 'blocked' }), 'active'), true);
+  assert.equal(matchesStateFilter(task({ state: 'completed' }), 'active'), false);
+  assert.equal(matchesStateFilter(task({ state: 'completed' }), 'completed'), true);
+  assert.equal(matchesStateFilter(task({ state: 'open' }), 'claimed'), false);
+});
+
+test('applyTaskUpdate drops a task that no longer matches the filter', () => {
+  const keep = (t: Task): boolean => matchesStateFilter(t, 'active');
+  const list = [task({ id: 'a' }), task({ id: 'b' })];
+  const next = applyTaskUpdate(list, task({ id: 'a', state: 'completed' }), keep);
+  assert.deepEqual(next.map((t) => t.id), ['b']);
+  // A pushed task that never matched is not inserted either.
+  assert.equal(applyTaskUpdate(list, task({ id: 'c', state: 'cancelled' }), keep).length, 2);
+});
+
+test('assigneeLabel prefers the agent name', () => {
+  assert.equal(assigneeLabel(task()), 'unassigned');
+  assert.equal(assigneeLabel(task({ assignee: '5a8c8086-39c8', assigneeName: 'Ava Intake' })), 'Ava Intake');
+  assert.equal(assigneeLabel(task({ assignee: '5a8c8086-39c8' })), 'agent 5a8c8086');
 });

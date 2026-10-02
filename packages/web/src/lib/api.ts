@@ -1,8 +1,24 @@
-import { RatchetClient, type Task } from '@workspace/sdk';
+import { RatchetClient, TASK_FIELDS, type Task, type TaskAction, type TaskFilter } from '@workspace/sdk';
 import { createClient, type Client as WsClient } from 'graphql-ws';
 
-const TASK_FIELDS =
-  'id ruleKey ruleVersion queue template priority state assignee slaDueAt subject createdAt updatedAt';
+/** State of the live-updates socket, as the operator console's badge reports it. */
+export type ConnectionStatus = 'connecting' | 'live' | 'reconnecting' | 'offline';
+
+export interface EventSummary {
+  id: string;
+  type: string;
+  occurredAt: string;
+  payload: Record<string, unknown>;
+  delta: Record<string, unknown>;
+}
+
+/** Turn whatever graphql-ws hands the error sink (GraphQL errors, a CloseEvent, an Error) into text. */
+function describeSubscriptionError(err: unknown): string {
+  if (Array.isArray(err)) return (err[0] as { message?: string } | undefined)?.message ?? 'subscription failed';
+  if (err instanceof Error) return err.message;
+  const code = (err as { code?: number } | null)?.code;
+  return code ? `live updates disconnected (code ${code})` : 'live updates disconnected';
+}
 
 export interface ConsoleApiOptions {
   baseUrl?: string;
@@ -29,6 +45,8 @@ export class ConsoleApi {
   private readonly baseUrl: string;
   private readonly apiKey: string;
   private ws: WsClient | null = null;
+  private status: ConnectionStatus = 'connecting';
+  private readonly statusListeners = new Set<(s: ConnectionStatus) => void>();
 
   constructor(opts: ConsoleApiOptions) {
     this.baseUrl = (opts.baseUrl ?? window.location.origin).replace(/\/$/, '');
@@ -36,7 +54,7 @@ export class ConsoleApi {
     this.client = new RatchetClient({ baseUrl: this.baseUrl, apiKey: this.apiKey });
   }
 
-  tasks(filter: { queue?: string; state?: string } = {}): Promise<Task[]> {
+  tasks(filter: TaskFilter = {}): Promise<Task[]> {
     return this.client.tasks(filter);
   }
 
@@ -46,10 +64,9 @@ export class ConsoleApi {
     ).then((d) => d.queues);
   }
 
-  act(action: 'claim' | 'complete' | 'block', id: string): Promise<Task> {
-    if (action === 'claim') return this.client.claimTask(id);
-    if (action === 'complete') return this.client.completeTask(id);
-    return this.client.blockTask(id);
+  /** Run a state-machine action. Every action has a `<action>Task` method on the SDK client. */
+  act(action: TaskAction, id: string): Promise<Task> {
+    return this.client[`${action}Task`](id);
   }
 
   /** All stored rule versions (including superseded) — the admin console's history + diffs. */
@@ -97,21 +114,53 @@ export class ConsoleApi {
   }
 
   /** Event history for a task's subject entity — the "task detail with event history" view. */
-  events(entityId: string): Promise<Array<{ id: string; type: string; occurredAt: string }>> {
+  events(entityId: string): Promise<EventSummary[]> {
     return this.client
-      .graphql<{ events: Array<{ id: string; type: string; occurredAt: string }> }>(
-        'query($entityId: String!) { events(entityId: $entityId) { id type occurredAt } }',
+      .graphql<{ events: EventSummary[] }>(
+        'query($entityId: String!) { events(entityId: $entityId) { id type occurredAt payload delta } }',
         { entityId },
       )
       .then((d) => d.events);
   }
 
-  /** Subscribe to live task changes. Returns an unsubscribe function. */
-  subscribeToQueue(queue: string | undefined, onTask: (task: Task) => void): () => void {
+  /** Report the socket's state now and on every change. Returns an unsubscribe function. */
+  onConnectionStatus(listener: (status: ConnectionStatus) => void): () => void {
+    this.statusListeners.add(listener);
+    listener(this.status);
+    return () => {
+      this.statusListeners.delete(listener);
+    };
+  }
+
+  private setStatus(status: ConnectionStatus): void {
+    this.status = status;
+    for (const listener of this.statusListeners) listener(status);
+  }
+
+  /**
+   * Subscribe to live task changes. Returns an unsubscribe function. `onError` receives anything
+   * that stops the feed: a rejected subscription (a key without tasks:read) or a lost connection.
+   */
+  subscribeToQueue(
+    queue: string | undefined,
+    onTask: (task: Task) => void,
+    onError?: (message: string) => void,
+  ): () => void {
     const wsUrl = this.baseUrl.replace(/^http/, 'ws') + '/graphql';
     this.ws ??= createClient({
       url: wsUrl,
       connectionParams: { authorization: `Bearer ${this.apiKey}` },
+      // Changing the queue filter unsubscribes and resubscribes; without a grace period the lazy
+      // client drops the socket in between and the badge flickers through "reconnecting".
+      lazyCloseTimeout: 5000,
+      on: {
+        connecting: (isRetry) => this.setStatus(isRetry ? 'reconnecting' : 'connecting'),
+        connected: () => this.setStatus('live'),
+        // The retry starts after a backoff delay; say so now rather than showing "live" meanwhile.
+        closed: () => {
+          if (this.status === 'live') this.setStatus('reconnecting');
+        },
+      },
     });
 
     return this.ws.subscribe<{ queueUpdated: Task }>(
@@ -121,9 +170,14 @@ export class ConsoleApi {
       },
       {
         next: (msg) => {
+          if (msg.errors?.length) onError?.(describeSubscriptionError(msg.errors));
           if (msg.data?.queueUpdated) onTask(msg.data.queueUpdated);
         },
-        error: (err) => console.error('subscription error', err),
+        error: (err) => {
+          // GraphQL errors leave the socket up; anything else means the client gave up retrying.
+          if (!Array.isArray(err)) this.setStatus('offline');
+          onError?.(describeSubscriptionError(err));
+        },
         complete: () => {},
       },
     );

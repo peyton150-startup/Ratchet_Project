@@ -27,6 +27,7 @@ function task(overrides: Partial<TaskView> = {}): TaskView {
     priority: 0,
     state: 'open',
     assignee: null,
+    assigneeName: null,
     slaDueAt: null,
     subject: {},
     createdAt: new Date(),
@@ -50,6 +51,25 @@ test('pubsub delivers a task change to the tenant subscriber', async () => {
   const r = await withTimeout(sub.next(), 2000);
   assert.equal(r.value.state, 'claimed');
   await sub.return();
+});
+
+test('closing a subscription before Redis confirms it does not crash the process', async () => {
+  // A console that unsubscribes straight after subscribing (a fast filter change, a page that
+  // mounts twice) disconnects while SUBSCRIBE is still in flight. ioredis then rejects that pending
+  // command; left unhandled, the rejection exits the API process.
+  const unhandled: unknown[] = [];
+  const onUnhandled = (reason: unknown): void => {
+    unhandled.push(reason);
+  };
+  process.on('unhandledRejection', onUnhandled);
+  try {
+    const sub = pubsub.subscribe(randomUUID());
+    await sub.return();
+    await new Promise((r) => setTimeout(r, 300));
+    assert.deepEqual(unhandled, []);
+  } finally {
+    process.off('unhandledRejection', onUnhandled);
+  }
 });
 
 test('subscribers are tenant-isolated', async () => {

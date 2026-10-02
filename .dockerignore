@@ -5,7 +5,6 @@
 .git
 .github
 .claude
-.railway
 .env
 .env.*
 docs

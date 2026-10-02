@@ -73,24 +73,23 @@ The two halves deploy separately: the consoles are a static bundle with no serve
 | `packages/web` | Vercel — project `ratchet-project-web` | Vite preset, root directory `packages/web`, **"Include files outside the root directory" enabled** so the `@workspace/sdk` workspace dependency resolves |
 | `packages/api` | Northflank — service `ratchet-api` | built from the root [`Dockerfile`](Dockerfile); default command |
 | pipeline worker | Northflank — service `ratchet-worker` | same image, command `node packages/api/dist/pipeline/worker.js` |
-| migrations | Northflank — job `ratchet-migrate` | same image, command `node packages/api/dist/migrate.js` |
 | Postgres | Supabase | used as plain Postgres through the session pooler; no Supabase APIs |
-| Redis | Upstash | requires TLS, so the URL scheme is `rediss://`, not `redis://` |
+| Redis | Northflank — addon `ratchet-project-redis` | private to the Northflank project; `noeviction`, because the event stream lives here |
 
-The full procedure, the Supabase setup, the verification checklist and what has and has not been verified are in [docs/deployment.md](docs/deployment.md). The backend previously ran on Railway; `packages/api/railway.json` and `railway.worker.json` remain until the Northflank cutover is verified.
+The resource settings, secret groups, Supabase setup, verification checklist and what has and has not been verified are in [docs/deployment.md](docs/deployment.md).
 
 Build order matters on both platforms: `@workspace/sdk` must be built before `@workspace/api` or `@workspace/web`, because both resolve it through `dist/`. Building only the leaf package fails with `TS2307: Cannot find module '@workspace/sdk'`.
 
-Migrations run as a separate job before a release (`node packages/api/dist/migrate.js`), never on service start, so replicas cannot race each other. The runner is compiled rather than invoked through `tsx`, because `tsx` is a devDependency and does not exist in the deployed image. It is forward-only and idempotent, tracked in `schema_migrations`.
+Migrations run as a separate step before a release (`node packages/api/dist/migrate.js`), never on service start, so replicas cannot race each other. The runner is compiled rather than invoked through `tsx`, because `tsx` is a devDependency and does not exist in the deployed image. It is forward-only and idempotent, tracked in `schema_migrations`.
 
 Environment variables that must be set, beyond what each platform injects:
 
 | Variable | Where | Notes |
 |---|---|---|
 | `VITE_API_URL` | Vercel | baked in at build time, so changing it requires a redeploy |
-| `DATABASE_URL` | api + worker | the least-privilege `ratchet_app` role — **not** `postgres`, which bypasses row-level security and would silently disable tenant isolation. Must end in `?sslmode=require` |
-| `ADMIN_DATABASE_URL` | worker + migrate job | the `postgres` role; migrations create roles and set `FORCE` RLS, and the worker's relay and sweeps are cross-tenant. Must end in `?sslmode=require` |
-| `REDIS_URL` | api + worker | `rediss://` |
+| `DATABASE_URL` | api + worker | the least-privilege `ratchet_app` role — **not** `postgres`, which bypasses row-level security and would silently disable tenant isolation. Must end in `?sslmode=verify-full` |
+| `ADMIN_DATABASE_URL` | worker only | the `postgres` role; migrations create roles and set `FORCE` RLS, and the worker's relay and sweeps are cross-tenant. Must end in `?sslmode=verify-full` |
+| `REDIS_URL` | api + worker | `rediss://`, injected from the Redis addon |
 | `CORS_ORIGINS` | api | comma-separated; an unset value disables cross-origin access entirely. Must list every origin the consoles are served from |
 
 `CORS_ORIGINS` also governs the WebSocket handshake, since CORS does not apply to WebSockets and the subscription endpoint enforces the same allowlist at `verifyClient`.

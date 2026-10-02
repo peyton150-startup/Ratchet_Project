@@ -123,5 +123,11 @@ export type Condition =
   | { lte: [string, unknown] }
   | { in: [string, unknown] };
 
+/** Scans a scheduled rule may run. The engine allowlists these, like the state predicates. */
+export const SCAN_PREDICATES = ['stale_documents_at_underwriting'] as const;
+
+/** What a cancel_tasks action can sweep. Only an application's open tasks, today (R12). */
+export const CANCEL_SCOPES = ['application'] as const;
+
 export const QUEUE_STRATEGIES = ['round_robin', 'skill_tag', 'capacity'] as const;
 export type QueueStrategy = (typeof QUEUE_STRATEGIES)[number];

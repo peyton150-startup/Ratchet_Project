@@ -23,6 +23,8 @@ export interface Task {
   priority: number;
   state: string;
   assignee: string | null;
+  /** Name of the agent the task is routed to, when it has one. */
+  assigneeName: string | null;
   slaDueAt: string | null;
   subject: Record<string, unknown>;
   createdAt: string;
@@ -39,6 +41,8 @@ export interface Queue {
 export interface TaskFilter {
   queue?: string;
   state?: string;
+  /** Only tasks that can still be worked (open, claimed, blocked). */
+  activeOnly?: boolean;
   limit?: number;
 }
 

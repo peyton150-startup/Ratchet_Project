@@ -22,6 +22,10 @@ export class TaskSubscription implements AsyncIterableIterator<TaskView> {
     this.sub = makeSub();
     this.sub.on('message', (_ch: string, message: string) => this.handle(message));
     this.readyPromise = this.sub.subscribe(channel(tenantId));
+    // return() can disconnect while SUBSCRIBE is still in flight (a client that unsubscribes at
+    // once). ioredis then rejects this promise; with nobody awaiting ready(), that is an unhandled
+    // rejection, which exits the process. Callers that do await ready() still see the rejection.
+    this.readyPromise.catch(() => {});
   }
 
   /** Resolves once the Redis subscription is active (publish before this may be missed). */

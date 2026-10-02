@@ -24,8 +24,9 @@ export interface RatchetClientOptions {
   fetch?: typeof fetch;
 }
 
-const TASK_FIELDS =
-  'id ruleKey ruleVersion queue template priority state assignee slaDueAt subject createdAt updatedAt';
+/** Every field of Task, as a GraphQL selection. Exported so the consoles select the same shape. */
+export const TASK_FIELDS =
+  'id ruleKey ruleVersion queue template priority state assignee assigneeName slaDueAt subject createdAt updatedAt';
 
 /** Typed client for the Ratchet API: REST ingest + webhooks, GraphQL tasks/queues. */
 export class RatchetClient {
@@ -83,8 +84,8 @@ export class RatchetClient {
 
   tasks(filter: TaskFilter = {}): Promise<Task[]> {
     return this.graphql<{ tasks: Task[] }>(
-      `query($queue: String, $state: String, $limit: Int) {
-         tasks(queue: $queue, state: $state, limit: $limit) { ${TASK_FIELDS} }
+      `query($queue: String, $state: String, $activeOnly: Boolean, $limit: Int) {
+         tasks(queue: $queue, state: $state, activeOnly: $activeOnly, limit: $limit) { ${TASK_FIELDS} }
        }`,
       filter as Record<string, unknown>,
     ).then((d) => d.tasks);
@@ -112,6 +113,15 @@ export class RatchetClient {
   }
   blockTask(id: string): Promise<Task> {
     return this.mutateTask('blockTask', id);
+  }
+  unblockTask(id: string): Promise<Task> {
+    return this.mutateTask('unblockTask', id);
+  }
+  releaseTask(id: string): Promise<Task> {
+    return this.mutateTask('releaseTask', id);
+  }
+  cancelTask(id: string): Promise<Task> {
+    return this.mutateTask('cancelTask', id);
   }
   assignTask(id: string): Promise<Task> {
     return this.mutateTask('assignTask', id);

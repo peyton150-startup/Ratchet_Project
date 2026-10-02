@@ -1,5 +1,6 @@
 import type { Pool, PoolClient } from 'pg';
 import { withTenant } from '../db.js';
+import { ACTIVE_STATES_SQL } from './stateSql.js';
 
 // GraphQL-facing task shape (camelCase), mapped from the tasks table.
 export interface TaskView {
@@ -11,6 +12,7 @@ export interface TaskView {
   priority: number;
   state: string;
   assignee: string | null;
+  assigneeName: string | null;
   slaDueAt: Date | null;
   subject: Record<string, unknown>;
   createdAt: Date;
@@ -26,6 +28,7 @@ interface TaskRow {
   priority: number;
   state: string;
   assignee: string | null;
+  assignee_name: string | null;
   sla_due_at: Date | null;
   subject: Record<string, unknown>;
   created_at: Date;
@@ -42,6 +45,7 @@ function toView(r: TaskRow): TaskView {
     priority: r.priority,
     state: r.state,
     assignee: r.assignee,
+    assigneeName: r.assignee_name,
     slaDueAt: r.sla_due_at,
     subject: r.subject,
     createdAt: r.created_at,
@@ -49,12 +53,19 @@ function toView(r: TaskRow): TaskView {
   };
 }
 
-const COLUMNS = `id, rule_key, rule_version, queue, template, priority, state, assignee,
-                 sla_due_at, subject, created_at, updated_at`;
+// The agent's name rides along with every task read, so the console can show who a task is routed to
+// without a separate agents API. LEFT JOIN: an unassigned task still has to come back.
+const SELECT_TASKS = `SELECT t.id, t.rule_key, t.rule_version, t.queue, t.template, t.priority, t.state,
+                             t.assignee, a.name AS assignee_name,
+                             t.sla_due_at, t.subject, t.created_at, t.updated_at
+                        FROM tasks t
+                        LEFT JOIN agents a ON a.id = t.assignee`;
 
 export interface TaskFilter {
   queue?: string;
   state?: string;
+  /** Only tasks that can still be worked (open, claimed, blocked). */
+  activeOnly?: boolean;
   limit?: number;
 }
 
@@ -64,17 +75,18 @@ export async function listTasks(pool: Pool, tenantId: string, filter: TaskFilter
     const params: unknown[] = [];
     if (filter.queue) {
       params.push(filter.queue);
-      conditions.push(`queue = $${params.length}`);
+      conditions.push(`t.queue = $${params.length}`);
     }
     if (filter.state) {
       params.push(filter.state);
-      conditions.push(`state = $${params.length}`);
+      conditions.push(`t.state = $${params.length}`);
     }
+    if (filter.activeOnly) conditions.push(`t.state IN (${ACTIVE_STATES_SQL})`);
     const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
     params.push(Math.min(filter.limit ?? 100, 500));
     const r = await c.query<TaskRow>(
-      `SELECT ${COLUMNS} FROM tasks ${where}
-        ORDER BY priority DESC, created_at ASC
+      `${SELECT_TASKS} ${where}
+        ORDER BY t.priority DESC, t.created_at ASC
         LIMIT $${params.length}`,
       params,
     );
@@ -84,7 +96,7 @@ export async function listTasks(pool: Pool, tenantId: string, filter: TaskFilter
 
 /** Read a task inside an existing tenant transaction (no new connection/transaction). */
 export async function getTaskTx(client: PoolClient, id: string): Promise<TaskView | null> {
-  const r = await client.query<TaskRow>(`SELECT ${COLUMNS} FROM tasks WHERE id = $1`, [id]);
+  const r = await client.query<TaskRow>(`${SELECT_TASKS} WHERE t.id = $1`, [id]);
   return r.rowCount === 0 ? null : toView(r.rows[0]!);
 }
 

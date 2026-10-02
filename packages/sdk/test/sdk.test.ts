@@ -95,6 +95,28 @@ test('claimTask runs the mutation and returns the task', async () => {
   assert.ok((calls[0]!.body as string).includes('claimTask'));
 });
 
+test('unblock, release and cancel each run their own mutation', async () => {
+  for (const [method, field] of [
+    ['unblockTask', 'unblockTask'],
+    ['releaseTask', 'releaseTask'],
+    ['cancelTask', 'cancelTask'],
+  ] as const) {
+    const { fn, calls } = fakeFetch({ json: { data: { [field]: { id: 't-1', state: 'x' } } } });
+    const t = await client(fn)[method]('t-1');
+    assert.equal(t.id, 't-1');
+    assert.ok((calls[0]!.body as string).includes(`${field}(id: $id)`));
+  }
+});
+
+test('tasks() passes activeOnly and asks for the assignee name', async () => {
+  const { fn, calls } = fakeFetch({ json: { data: { tasks: [] } } });
+  await client(fn).tasks({ activeOnly: true });
+  const body = JSON.parse(calls[0]!.body as string) as { query: string; variables: Record<string, unknown> };
+  assert.equal(body.variables['activeOnly'], true);
+  assert.ok(body.query.includes('activeOnly: $activeOnly'));
+  assert.ok(body.query.includes('assigneeName'));
+});
+
 test('GraphQL errors surface as RatchetError', async () => {
   const { fn } = fakeFetch({ json: { errors: [{ message: 'forbidden' }] } });
   await assert.rejects(client(fn).tasks(), (e) => e instanceof RatchetError && /forbidden/.test(e.message));

@@ -67,10 +67,17 @@ export class RatchetClient {
       }),
       body: JSON.stringify({ query, variables }),
     });
-    const body = (await res.json()) as { data?: T; errors?: Array<{ message: string }> };
+    const body = (await res.json().catch(() => ({}))) as {
+      data?: T;
+      errors?: Array<{ message: string }>;
+      error?: string;
+    };
     if (body.errors && body.errors.length > 0) {
       throw new RatchetError(body.errors[0]!.message, res.status);
     }
+    // Auth and rate limiting answer before GraphQL runs, in the REST shape { error } with no
+    // `errors` array. Without this the caller dereferences undefined data and reports a TypeError.
+    if (!res.ok) throw new RatchetError(body.error ?? `graphql failed: HTTP ${res.status}`, res.status);
     return body.data as T;
   }
 

@@ -1,5 +1,6 @@
 import { StrictMode, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import { RatchetClient, RatchetError } from '@workspace/sdk';
 import { ConsoleApi } from './lib/api';
 import { OperatorConsole } from './operator/OperatorConsole';
 import { AdminConsole } from './admin/AdminConsole';
@@ -21,6 +22,41 @@ const API_BASE_URL = import.meta.env.VITE_API_URL?.replace(/\/$/, '') || undefin
 function App() {
   const [apiKey, setApiKey] = useState<string>(() => localStorage.getItem(STORAGE_KEY) ?? '');
   const [draft, setDraft] = useState('');
+  const [checking, setChecking] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Ask the API about the key before storing it. A rejected key that is stored anyway leaves every
+  // later request failing with no route back to this screen.
+  const signIn = async () => {
+    const key = draft.trim();
+    if (!key) return;
+    setChecking(true);
+    setError(null);
+    try {
+      await new RatchetClient({ baseUrl: API_BASE_URL ?? window.location.origin, apiKey: key }).graphql(
+        '{ __typename }',
+      );
+      localStorage.setItem(STORAGE_KEY, key);
+      setApiKey(key);
+    } catch (e) {
+      if (e instanceof RatchetError && e.status === 401) {
+        setError('The API did not recognise that key. Paste the key on its own, without "Bearer".');
+      } else if (e instanceof RatchetError) {
+        setError(`The API rejected the request: ${e.message}`);
+      } else {
+        // fetch itself failed: the API is down, or it does not allow this page's origin (CORS).
+        setError(`Could not reach the API from ${window.location.origin}. Is this the console's canonical URL?`);
+      }
+    } finally {
+      setChecking(false);
+    }
+  };
+
+  const signOut = () => {
+    localStorage.removeItem(STORAGE_KEY);
+    setDraft('');
+    setApiKey('');
+  };
 
   if (!apiKey) {
     return (
@@ -30,9 +66,14 @@ function App() {
           <input
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') void signIn();
+            }}
             placeholder="API key"
+            aria-label="API key"
             style={{
               width: '100%',
+              boxSizing: 'border-box',
               padding: tokens.space(2),
               marginBottom: tokens.space(3),
               background: tokens.color.surfaceAlt,
@@ -41,25 +82,24 @@ function App() {
               color: tokens.color.text,
             }}
           />
-          <Button
-            tone="accent"
-            onClick={() => {
-              localStorage.setItem(STORAGE_KEY, draft.trim());
-              setApiKey(draft.trim());
-            }}
-          >
-            Open console
+          {error ? (
+            <div role="alert" style={{ color: tokens.color.danger, fontSize: '13px', marginBottom: tokens.space(3) }}>
+              {error}
+            </div>
+          ) : null}
+          <Button tone="accent" onClick={() => void signIn()} disabled={checking || !draft.trim()}>
+            {checking ? 'Checking…' : 'Open console'}
           </Button>
         </Card>
       </PageShell>
     );
   }
 
-  return <ConsoleSwitcher apiKey={apiKey} />;
+  return <ConsoleSwitcher key={apiKey} apiKey={apiKey} onSignOut={signOut} />;
 }
 
 /** Both consoles share one API instance (and therefore one WebSocket) and the component library. */
-function ConsoleSwitcher({ apiKey }: { apiKey: string }) {
+function ConsoleSwitcher({ apiKey, onSignOut }: { apiKey: string; onSignOut: () => void }) {
   const [view, setView] = useState<'operator' | 'admin'>('operator');
   const [api] = useState(() => new ConsoleApi({ apiKey, baseUrl: API_BASE_URL }));
 
@@ -80,6 +120,16 @@ function ConsoleSwitcher({ apiKey }: { apiKey: string }) {
         <Button tone={view === 'admin' ? 'accent' : 'neutral'} onClick={() => setView('admin')}>
           Admin
         </Button>
+        <div style={{ marginLeft: 'auto' }}>
+          <Button
+            onClick={() => {
+              api.dispose();
+              onSignOut();
+            }}
+          >
+            Sign out
+          </Button>
+        </div>
       </div>
       {view === 'operator' ? <OperatorConsole api={api} /> : <AdminConsole api={api} />}
     </div>

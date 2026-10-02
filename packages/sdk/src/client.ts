@@ -24,6 +24,21 @@ export interface RatchetClientOptions {
   fetch?: typeof fetch;
 }
 
+/**
+ * Why a REST call was refused, from the API's { error, details } body: "invalid event: Unrecognized
+ * key(s) in object: 'entityType'" tells an integrator what to fix; "HTTP 400" does not.
+ */
+async function failureReason(res: Response): Promise<string> {
+  const body = (await res.json().catch(() => ({}))) as {
+    error?: string;
+    details?: { formErrors?: string[]; fieldErrors?: Record<string, string[]> };
+  };
+  if (!body.error) return `HTTP ${res.status}`;
+  const field = Object.entries(body.details?.fieldErrors ?? {})[0];
+  const detail = body.details?.formErrors?.[0] ?? (field ? `${field[0]}: ${field[1][0]}` : undefined);
+  return detail ? `${body.error}: ${detail}` : body.error;
+}
+
 /** Every field of Task, as a GraphQL selection. Exported so the consoles select the same shape. */
 export const TASK_FIELDS =
   'id ruleKey ruleVersion queue template priority state assignee assigneeName slaDueAt subject createdAt updatedAt';
@@ -54,7 +69,7 @@ export class RatchetClient {
       headers: this.headers({ 'content-type': 'application/json' }),
       body: JSON.stringify(event),
     });
-    if (!res.ok) throw new RatchetError(`ingest failed: HTTP ${res.status}`, res.status);
+    if (!res.ok) throw new RatchetError(`ingest failed: ${await failureReason(res)}`, res.status);
     return (await res.json()) as IngestResult;
   }
 

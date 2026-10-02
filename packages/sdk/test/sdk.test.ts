@@ -100,6 +100,15 @@ test('GraphQL errors surface as RatchetError', async () => {
   await assert.rejects(client(fn).tasks(), (e) => e instanceof RatchetError && /forbidden/.test(e.message));
 });
 
+test('a rejected key on /graphql surfaces the server message and status, not a TypeError', async () => {
+  // Auth fails before GraphQL runs, so the body is the REST shape { error }, with no `errors` array.
+  const { fn } = fakeFetch({ ok: false, status: 401, json: { error: 'invalid API key' } });
+  await assert.rejects(
+    client(fn).tasks(),
+    (e) => e instanceof RatchetError && e.status === 401 && /invalid API key/.test(e.message),
+  );
+});
+
 test('registerWebhook returns the id and secret', async () => {
   const { fn, calls } = fakeFetch({ status: 201, json: { id: 'w-1', secret: 's-1', url: 'u', events: ['task.created'] } });
   const wh = await client(fn).registerWebhook({ url: 'https://x.test/hook', events: ['task.created'] });

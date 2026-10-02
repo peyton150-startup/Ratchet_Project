@@ -30,6 +30,11 @@ export function isRole(value: unknown): value is Role {
   return value === 'operator' || value === 'admin' || value === 'integrator';
 }
 
+/** Everything a role may do. The console uses it to show only the views a key can use. */
+export function permissionsFor(role: Role): readonly Permission[] {
+  return ROLE_PERMISSIONS[role];
+}
+
 export function can(role: Role, permission: Permission): boolean {
   return ROLE_PERMISSIONS[role].includes(permission);
 }

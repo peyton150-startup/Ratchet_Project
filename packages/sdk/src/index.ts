@@ -15,4 +15,6 @@ export type {
   TaskFilter,
   Webhook,
   RegisteredWebhook,
+  WebhookDelivery,
+  Viewer,
 } from './types.js';

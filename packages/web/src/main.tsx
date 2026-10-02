@@ -1,11 +1,13 @@
-import { StrictMode, useState } from 'react';
+import { StrictMode, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { RatchetClient, RatchetError } from '@workspace/sdk';
+import { RatchetClient, RatchetError, type Viewer } from '@workspace/sdk';
 import { ConsoleApi } from './lib/api';
 import { OperatorConsole } from './operator/OperatorConsole';
 import { AdminConsole } from './admin/AdminConsole';
 import { EventConsole } from './events/EventConsole';
-import { Button, Card, PageShell, tokens } from './components';
+import { WebhooksConsole } from './webhooks/WebhooksConsole';
+import { visibleViews, type ViewId } from './lib/views';
+import { Badge, Button, Card, PageShell, tokens } from './components';
 
 const STORAGE_KEY = 'ratchet.apiKey';
 
@@ -99,51 +101,70 @@ function App() {
   return <ConsoleSwitcher key={apiKey} apiKey={apiKey} onSignOut={signOut} />;
 }
 
-const VIEWS = [
-  { id: 'operator', label: 'Operator' },
-  { id: 'admin', label: 'Admin' },
-  { id: 'events', label: 'Send event' },
-] as const;
-type View = (typeof VIEWS)[number]['id'];
-
 /** The views share one API instance (and therefore one WebSocket) and the component library. */
 function ConsoleSwitcher({ apiKey, onSignOut }: { apiKey: string; onSignOut: () => void }) {
-  const [view, setView] = useState<View>('operator');
   const [api] = useState(() => new ConsoleApi({ apiKey, baseUrl: API_BASE_URL }));
+  // 'loading' until the API says who this key is; null when it could not (see visibleViews).
+  const [viewer, setViewer] = useState<Viewer | null | 'loading'>('loading');
+  const [chosen, setChosen] = useState<ViewId | null>(null);
+
+  useEffect(() => {
+    api.viewer().then(setViewer).catch(() => setViewer(null));
+  }, [api]);
+
+  const signOutBar = (
+    <div style={{ marginLeft: 'auto', display: 'flex', gap: tokens.space(2), alignItems: 'center' }}>
+      {viewer && viewer !== 'loading' ? <Badge>{viewer.role} key</Badge> : null}
+      <Button
+        onClick={() => {
+          api.dispose();
+          onSignOut();
+        }}
+      >
+        Sign out
+      </Button>
+    </div>
+  );
+  const barStyle = {
+    display: 'flex',
+    gap: tokens.space(2),
+    padding: tokens.space(3),
+    background: tokens.color.bg,
+    borderBottom: `1px solid ${tokens.color.border}`,
+  } as const;
+
+  // Render no view until the role is known: an integrator key would otherwise flash the Operator
+  // view and its "forbidden" error before the tabs settle.
+  if (viewer === 'loading') return <div style={barStyle}>{signOutBar}</div>;
+
+  const views = visibleViews(viewer ? viewer.permissions : null);
+  const view = views.some((v) => v.id === chosen) ? chosen : (views[0]?.id ?? null);
+  const setView = setChosen;
 
   return (
     <div>
-      <div
-        style={{
-          display: 'flex',
-          gap: tokens.space(2),
-          padding: tokens.space(3),
-          background: tokens.color.bg,
-          borderBottom: `1px solid ${tokens.color.border}`,
-        }}
-      >
-        {VIEWS.map((v) => (
+      <div style={barStyle}>
+        {views.map((v) => (
           <Button key={v.id} tone={view === v.id ? 'accent' : 'neutral'} onClick={() => setView(v.id)}>
             {v.label}
           </Button>
         ))}
-        <div style={{ marginLeft: 'auto' }}>
-          <Button
-            onClick={() => {
-              api.dispose();
-              onSignOut();
-            }}
-          >
-            Sign out
-          </Button>
-        </div>
+        {signOutBar}
       </div>
       {view === 'operator' ? <OperatorConsole api={api} /> : null}
       {view === 'admin' ? <AdminConsole api={api} /> : null}
+      {view === 'webhooks' ? <WebhooksConsole api={api} /> : null}
       {/* Kept mounted: the form and the log of what was sent survive a trip to the Operator view. */}
-      <div style={{ display: view === 'events' ? 'block' : 'none' }}>
-        <EventConsole api={api} visible={view === 'events'} />
-      </div>
+      {views.some((v) => v.id === 'events') ? (
+        <div style={{ display: view === 'events' ? 'block' : 'none' }}>
+          <EventConsole api={api} visible={view === 'events'} />
+        </div>
+      ) : null}
+      {view === null ? (
+        <PageShell title="Ratchet">
+          <Card>This key has no permissions the console can use.</Card>
+        </PageShell>
+      ) : null}
     </div>
   );
 }

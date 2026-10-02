@@ -5,6 +5,8 @@ import type {
   TaskFilter,
   Webhook,
   RegisteredWebhook,
+  WebhookDelivery,
+  Viewer,
 } from './types.js';
 
 export class RatchetError extends Error {
@@ -31,11 +33,13 @@ export interface RatchetClientOptions {
 async function failureReason(res: Response): Promise<string> {
   const body = (await res.json().catch(() => ({}))) as {
     error?: string;
+    reason?: string;
     details?: { formErrors?: string[]; fieldErrors?: Record<string, string[]> };
   };
   if (!body.error) return `HTTP ${res.status}`;
   const field = Object.entries(body.details?.fieldErrors ?? {})[0];
-  const detail = body.details?.formErrors?.[0] ?? (field ? `${field[0]}: ${field[1][0]}` : undefined);
+  const detail =
+    body.reason ?? body.details?.formErrors?.[0] ?? (field ? `${field[0]}: ${field[1][0]}` : undefined);
   return detail ? `${body.error}: ${detail}` : body.error;
 }
 
@@ -97,6 +101,11 @@ export class RatchetClient {
     return body.data as T;
   }
 
+  /** The key's role and permissions. Any valid key may ask. */
+  viewer(): Promise<Viewer> {
+    return this.graphql<{ viewer: Viewer }>('{ viewer { role permissions } }').then((d) => d.viewer);
+  }
+
   tasks(filter: TaskFilter = {}): Promise<Task[]> {
     return this.graphql<{ tasks: Task[] }>(
       `query($queue: String, $state: String, $activeOnly: Boolean, $limit: Int) {
@@ -149,13 +158,33 @@ export class RatchetClient {
       headers: this.headers({ 'content-type': 'application/json' }),
       body: JSON.stringify(input),
     });
-    if (!res.ok) throw new RatchetError(`registerWebhook failed: HTTP ${res.status}`, res.status);
+    if (!res.ok) throw new RatchetError(`registerWebhook failed: ${await failureReason(res)}`, res.status);
     return (await res.json()) as RegisteredWebhook;
   }
 
   async listWebhooks(): Promise<Webhook[]> {
     const res = await this.fetchFn(`${this.baseUrl}/webhooks`, { headers: this.headers() });
-    if (!res.ok) throw new RatchetError(`listWebhooks failed: HTTP ${res.status}`, res.status);
+    if (!res.ok) throw new RatchetError(`listWebhooks failed: ${await failureReason(res)}`, res.status);
     return (await res.json()) as Webhook[];
+  }
+
+  /** Pause (false) or resume (true) a webhook. A paused webhook keeps its secret and is not called. */
+  async setWebhookActive(id: string, active: boolean): Promise<Webhook> {
+    const res = await this.fetchFn(`${this.baseUrl}/webhooks/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      headers: this.headers({ 'content-type': 'application/json' }),
+      body: JSON.stringify({ active }),
+    });
+    if (!res.ok) throw new RatchetError(`setWebhookActive failed: ${await failureReason(res)}`, res.status);
+    return (await res.json()) as Webhook;
+  }
+
+  /** The most recent deliveries to one webhook, newest first. */
+  async webhookDeliveries(id: string): Promise<WebhookDelivery[]> {
+    const res = await this.fetchFn(`${this.baseUrl}/webhooks/${encodeURIComponent(id)}/deliveries`, {
+      headers: this.headers(),
+    });
+    if (!res.ok) throw new RatchetError(`webhookDeliveries failed: ${await failureReason(res)}`, res.status);
+    return (await res.json()) as WebhookDelivery[];
   }
 }

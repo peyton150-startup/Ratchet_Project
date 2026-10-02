@@ -59,3 +59,20 @@ export interface RegisteredWebhook {
   url: string;
   events: string[];
 }
+
+export interface WebhookDelivery {
+  id: string;
+  eventType: string;
+  /** delivered | failed */
+  status: string;
+  attempts: number;
+  /** The endpoint's last HTTP status; null when it was never reached (blocked URL, open circuit). */
+  responseStatus: number | null;
+  createdAt: string;
+}
+
+/** The API key making the request. */
+export interface Viewer {
+  role: string;
+  permissions: string[];
+}

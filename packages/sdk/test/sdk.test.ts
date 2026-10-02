@@ -164,3 +164,34 @@ test('registerWebhook returns the id and secret', async () => {
   assert.equal(calls[0]!.url, 'https://api.test/webhooks');
   assert.equal(calls[0]!.method, 'POST');
 });
+
+test('a rejected webhook URL reports the reason the API gave', async () => {
+  const { fn } = fakeFetch({
+    ok: false,
+    status: 400,
+    json: { error: 'webhook URL rejected', reason: 'resolves to a private address' },
+  });
+  await assert.rejects(
+    client(fn).registerWebhook({ url: 'http://10.0.0.1/hook', events: ['task.created'] }),
+    (e) => e instanceof RatchetError && /webhook URL rejected: resolves to a private address/.test(e.message),
+  );
+});
+
+test('setWebhookActive patches the webhook and webhookDeliveries reads its log', async () => {
+  const paused = fakeFetch({ json: { id: 'w-1', url: 'u', events: ['task.created'], active: false } });
+  const wh = await client(paused.fn).setWebhookActive('w-1', false);
+  assert.equal(wh.active, false);
+  assert.equal(paused.calls[0]!.url, 'https://api.test/webhooks/w-1');
+  assert.equal(paused.calls[0]!.method, 'PATCH');
+  assert.equal(paused.calls[0]!.body, '{"active":false}');
+
+  const log = fakeFetch({ json: [{ id: 'd-1', status: 'delivered' }] });
+  const deliveries = await client(log.fn).webhookDeliveries('w-1');
+  assert.equal(deliveries[0]!.status, 'delivered');
+  assert.equal(log.calls[0]!.url, 'https://api.test/webhooks/w-1/deliveries');
+});
+
+test('viewer() returns the key role and permissions', async () => {
+  const { fn } = fakeFetch({ json: { data: { viewer: { role: 'integrator', permissions: ['events:ingest'] } } } });
+  assert.deepEqual(await client(fn).viewer(), { role: 'integrator', permissions: ['events:ingest'] });
+});

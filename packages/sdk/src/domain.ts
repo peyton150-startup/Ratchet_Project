@@ -129,5 +129,8 @@ export const SCAN_PREDICATES = ['stale_documents_at_underwriting'] as const;
 /** What a cancel_tasks action can sweep. Only an application's open tasks, today (R12). */
 export const CANCEL_SCOPES = ['application'] as const;
 
+/** Notifications a webhook can subscribe to. The worker dispatches only these. */
+export const WEBHOOK_EVENTS = ['task.created'] as const;
+
 export const QUEUE_STRATEGIES = ['round_robin', 'skill_tag', 'capacity'] as const;
 export type QueueStrategy = (typeof QUEUE_STRATEGIES)[number];

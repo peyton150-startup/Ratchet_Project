@@ -3,6 +3,10 @@ import {
   TASK_FIELDS,
   type EventInput,
   type IngestResult,
+  type RegisteredWebhook,
+  type Viewer,
+  type Webhook,
+  type WebhookDelivery,
   type Task,
   type TaskAction,
   type TaskFilter,
@@ -75,6 +79,28 @@ export class ConsoleApi {
   /** Run a state-machine action. Every action has a `<action>Task` method on the SDK client. */
   act(action: TaskAction, id: string): Promise<Task> {
     return this.client[`${action}Task`](id);
+  }
+
+  /** The signed-in key's role and permissions. */
+  viewer(): Promise<Viewer> {
+    return this.client.viewer();
+  }
+
+  webhooks(): Promise<Webhook[]> {
+    return this.client.listWebhooks();
+  }
+
+  /** Register a webhook. The result carries the signing secret, which is never returned again. */
+  registerWebhook(input: { url: string; events: string[] }): Promise<RegisteredWebhook> {
+    return this.client.registerWebhook(input);
+  }
+
+  setWebhookActive(id: string, active: boolean): Promise<Webhook> {
+    return this.client.setWebhookActive(id, active);
+  }
+
+  webhookDeliveries(id: string): Promise<WebhookDelivery[]> {
+    return this.client.webhookDeliveries(id);
   }
 
   /** Post an event to the ingest API, as a client system would. Needs events:ingest. */

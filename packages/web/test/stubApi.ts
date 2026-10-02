@@ -5,6 +5,8 @@ import {
   type Task,
   type TaskAction,
   type TaskFilter,
+  type Webhook,
+  type WebhookDelivery,
 } from '@workspace/sdk';
 import type { ConnectionStatus, ConsoleApi, EventSummary, RuleVersion } from '../src/lib/api';
 
@@ -36,6 +38,11 @@ export interface StubOptions {
   ingestError?: { status: number; message: string };
   /** Make reading rules fail, as it does for a key without rules:read. */
   rulesForbidden?: boolean;
+  webhooks?: Webhook[];
+  /** Delivery log per webhook id. */
+  deliveries?: Record<string, WebhookDelivery[]>;
+  /** Make registering fail the way the API would. */
+  registerError?: { status: number; message: string };
 }
 
 export interface StubApi {
@@ -47,6 +54,8 @@ export interface StubApi {
     dryRunEvents: unknown[];
     taskFilters: TaskFilter[];
     ingested: EventInput[];
+    registered: Array<{ url: string; events: string[] }>;
+    setActive: Array<{ id: string; active: boolean }>;
   };
   /** Push a task through the subscription, as the server would. */
   pushUpdate: (task: Task) => void;
@@ -68,7 +77,10 @@ export function stubApi(opts: StubOptions = {}): StubApi {
     dryRunEvents: [],
     taskFilters: [],
     ingested: [],
+    registered: [],
+    setActive: [],
   };
+  let webhooks = opts.webhooks ?? [];
   const seenKeys = new Map<string, string>();
   let subscriber: ((t: Task) => void) | null = null;
   let subscriptionError: ((message: string) => void) | null = null;
@@ -103,6 +115,21 @@ export function stubApi(opts: StubOptions = {}): StubApi {
       if (opts.rulesForbidden) throw new RatchetError('forbidden', 200);
       return opts.rules ?? [];
     },
+    webhooks: async () => webhooks,
+    registerWebhook: async (input: { url: string; events: string[] }) => {
+      calls.registered.push(input);
+      if (opts.registerError) throw new RatchetError(opts.registerError.message, opts.registerError.status);
+      const created = { id: `wh-${webhooks.length + 1}`, ...input, active: true };
+      webhooks = [created, ...webhooks];
+      return { id: created.id, secret: 'whsec_test', ...input };
+    },
+    setWebhookActive: async (id: string, active: boolean) => {
+      calls.setActive.push({ id, active });
+      const updated = { ...webhooks.find((w) => w.id === id)!, active };
+      webhooks = webhooks.map((w) => (w.id === id ? updated : w));
+      return updated;
+    },
+    webhookDeliveries: async (id: string) => opts.deliveries?.[id] ?? [],
     ingest: async (event: EventInput) => {
       calls.ingested.push(event);
       if (opts.ingestError) throw new RatchetError(opts.ingestError.message, opts.ingestError.status);

@@ -8,7 +8,7 @@ import { RulesEngine } from '../rules/engine.js';
 import { TaskService } from '../tasks/service.js';
 import { IllegalTransitionError, type TaskAction } from '../tasks/stateMachine.js';
 import { RoutingService } from '../routing/assign.js';
-import { requirePermission, type GraphQLContext } from './context.js';
+import { describeViewer, requirePermission, type GraphQLContext } from './context.js';
 
 const typeDefs = /* GraphQL */ `
   scalar DateTime
@@ -58,6 +58,12 @@ const typeDefs = /* GraphQL */ `
     createdAt: DateTime!
   }
 
+  "The API key making the request: its role and what that role may do."
+  type Viewer {
+    role: String!
+    permissions: [String!]!
+  }
+
   type DryRunResult {
     matched: Boolean!
     decision: JSON
@@ -72,6 +78,7 @@ const typeDefs = /* GraphQL */ `
   }
 
   type Query {
+    viewer: Viewer!
     "activeOnly keeps only tasks that can still be worked (open, claimed, blocked)."
     tasks(queue: String, state: String, activeOnly: Boolean, limit: Int): [Task!]!
     task(id: ID!): Task
@@ -141,6 +148,7 @@ const resolvers = {
   DateTime: dateTime,
   JSON: json,
   Query: {
+    viewer: (_p: unknown, _a: unknown, ctx: GraphQLContext) => describeViewer(ctx),
     tasks: (
       _p: unknown,
       args: { queue?: string; state?: string; activeOnly?: boolean; limit?: number },

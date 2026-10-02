@@ -68,6 +68,27 @@ test('an unauthenticated context is rejected', async () => {
   assert.equal(res.errors[0]!.extensions?.code, 'UNAUTHENTICATED');
 });
 
+test('viewer reports the key role and its permissions, for every role', async () => {
+  const t = await seedTenant('gql-viewer');
+  const ask = (role: string): Promise<ExecResult> =>
+    exec('{ viewer { role permissions } }', { pool: appPool, tenantId: t.tenantId, role });
+
+  const admin = (await ask('admin')).data!['viewer'] as { role: string; permissions: string[] };
+  assert.equal(admin.role, 'admin');
+  assert.ok(admin.permissions.includes('rules:write'));
+
+  // An integrator can read nothing else over GraphQL, but must still be able to ask who it is.
+  const integrator = await ask('integrator');
+  assert.equal(integrator.errors, undefined);
+  assert.deepEqual(
+    [...(integrator.data!['viewer'] as { permissions: string[] }).permissions].sort(),
+    ['events:ingest', 'webhooks:manage'],
+  );
+
+  const anonymous = await exec('{ viewer { role } }', { pool: appPool });
+  assert.equal(anonymous.errors?.[0]?.extensions?.code, 'UNAUTHENTICATED');
+});
+
 test('claimTask transitions open -> claimed (tasks:work)', async () => {
   const t = await seedTenant('gql-claim');
   const id = await seedTask(t.tenantId);

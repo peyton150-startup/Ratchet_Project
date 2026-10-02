@@ -146,3 +146,71 @@ test('REST: register and list webhooks (webhooks:manage)', async () => {
   const forbidden = await fetch(`${server.url}/webhooks`, { headers: { authorization: `Bearer ${opKey}` } });
   assert.equal(forbidden.status, 403);
 });
+
+test('REST: a webhook can be paused and resumed, and a paused one is not called', async () => {
+  const t = await seedTenant('wh-pause');
+  const id = await seedWebhook(t.tenantId, 'https://example.test/hook', ['task.created']);
+  const patch = (target: string, body: unknown, key = t.rawKey): Promise<Response> =>
+    fetch(`${server.url}/webhooks/${target}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${key}` },
+      body: JSON.stringify(body),
+    });
+
+  const paused = await patch(id, { active: false });
+  assert.equal(paused.status, 200);
+  assert.deepEqual(await paused.json(), {
+    id,
+    url: 'https://example.test/hook',
+    events: ['task.created'],
+    active: false,
+  });
+
+  const { sender, calls } = capturingSender(200);
+  const dispatcher = new WebhookDispatcher(appPool, { maxAttempts: 1, baseDelayMs: 0 }, sender, undefined, publicResolver);
+  assert.equal(await dispatcher.dispatch(t.tenantId, 'task.created', { id: 'x' }), 0);
+  assert.equal(calls.length, 0, 'a paused webhook is not called');
+
+  assert.equal((await patch(id, { active: true })).status, 200);
+  assert.equal(await dispatcher.dispatch(t.tenantId, 'task.created', { id: 'x' }), 1);
+
+  // Rejections: a bad body, an id that is not a uuid, an unknown id, another tenant's webhook.
+  assert.equal((await patch(id, { active: 'no' })).status, 400);
+  assert.equal((await patch('not-a-uuid', { active: false })).status, 404);
+  assert.equal((await patch(randomUUID(), { active: false })).status, 404);
+  const other = await seedTenant('wh-pause-other');
+  assert.equal((await patch(id, { active: false }, other.rawKey)).status, 404, 'tenant-isolated');
+});
+
+test('REST: deliveries lists what was sent to one webhook, newest first', async () => {
+  const t = await seedTenant('wh-deliveries');
+  const id = await seedWebhook(t.tenantId, 'https://example.test/hook', ['task.created']);
+  const otherHook = await seedWebhook(t.tenantId, 'https://example.test/other', ['task.created']);
+  await adminPool.query(
+    `INSERT INTO webhook_deliveries (tenant_id, webhook_id, event_type, payload, status, attempts, response_status, created_at)
+     VALUES ($1, $2, 'task.created', '{}', 'failed',    3, 500, now() - interval '1 hour'),
+            ($1, $2, 'task.created', '{}', 'delivered', 1, 200, now()),
+            ($1, $3, 'task.created', '{}', 'delivered', 1, 200, now())`,
+    [t.tenantId, id, otherHook],
+  );
+
+  const res = await fetch(`${server.url}/webhooks/${id}/deliveries`, {
+    headers: { authorization: `Bearer ${t.rawKey}` },
+  });
+  assert.equal(res.status, 200);
+  const rows = (await res.json()) as Array<{ status: string; attempts: number; responseStatus: number; eventType: string }>;
+  assert.equal(rows.length, 2, 'only this webhook');
+  assert.deepEqual(
+    rows.map((r) => [r.status, r.attempts, r.responseStatus, r.eventType]),
+    [
+      ['delivered', 1, 200, 'task.created'],
+      ['failed', 3, 500, 'task.created'],
+    ],
+  );
+
+  const opKey = await seedKey(t.tenantId, 'operator');
+  const forbidden = await fetch(`${server.url}/webhooks/${id}/deliveries`, {
+    headers: { authorization: `Bearer ${opKey}` },
+  });
+  assert.equal(forbidden.status, 403);
+});

@@ -2,7 +2,7 @@
 //
 // tsconfig.scripts.json cannot compile these: its rootDir is ./scripts, so any import of
 // ../src/* fails TS6059. Widening that rootDir would move migrate.js to dist/scripts/migrate.js
-// and break both railway.json's preDeployCommand and migrate.ts's ../migrations lookup, so this
+// and break both the documented migrate command and migrate.ts's ../migrations lookup, so this
 // is a separate config instead.
 //
 // rootDir is "." so scripts/ and src/ keep their relative positions in the output:

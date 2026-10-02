@@ -38,7 +38,7 @@ COPY packages/api/migrations packages/api/migrations
 COPY packages/api/certs packages/api/certs
 # Supabase signs its Postgres certificates with its own CA, which is not in Node's trust store.
 # Adding it here is what lets `sslmode=require` verify the server instead of failing with
-# SELF_SIGNED_CERT_IN_CHAIN. It extends the default store, so Upstash's public CA still works.
+# SELF_SIGNED_CERT_IN_CHAIN. It extends the default store, so the Redis addon's publicly signed certificate still verifies.
 ENV NODE_EXTRA_CA_CERTS=/app/packages/api/certs/supabase-root-2021-ca.crt
 USER node
 EXPOSE 3000

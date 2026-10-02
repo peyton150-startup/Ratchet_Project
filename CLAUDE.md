@@ -6,7 +6,7 @@ caused a failure that looked like success — a green build, a passing healthche
 
 ## Supabase
 
-**Connection strings must end in `?sslmode=require`.** Without it `pg` connects in plaintext
+**Connection strings must end in `?sslmode=verify-full` (or `require`).** Without it `pg` connects in plaintext
 and Supabase's pooler accepts the connection, so everything works while credentials and tenant
 data cross the internet unencrypted. With it, `pg` verifies against Supabase's own CA, which
 only the Docker image trusts (`NODE_EXTRA_CA_CERTS`). Running a script from a laptop without
@@ -18,38 +18,36 @@ project.** Supabase grants its Data API roles full access to every new table in 
 `tenants` has no RLS. Migrations applied without the bootstrap succeed, the app works, and the
 tenant list is readable by anyone holding the project's public key.
 
-**Supabase's `postgres` role is not a superuser, but it has `BYPASSRLS`.** The rule below about
-`DATABASE_URL` applies unchanged: pointing it at `postgres` silently disables tenant isolation.
+**`DATABASE_URL` must be the `ratchet_app` role, never `postgres`.** Row-level security is
+enforced against `ratchet_app`. Supabase's `postgres` role is not a superuser, but it has
+`BYPASSRLS`, so pointing `DATABASE_URL` at it silently disables tenant isolation: `/health`
+passes, `/db-check` passes, queries return rows. This nearly shipped during the Northflank
+cutover, when the pooler string was pasted into `DATABASE_URL` unchanged. Check
+`pg_stat_activity` for the connected role instead of trusting the endpoints.
+`ADMIN_DATABASE_URL` is the `postgres` role, used by migrations and by the worker's
+cross-tenant relay and sweeps. The API must never receive it.
 
 **Do not run the API test suite against it.** The suite needs a database it can fill with
 throwaway tenants. Locally it also fails one pipeline test against a database that earlier runs
 have dirtied; a fresh database passes 79/79.
 
-## Railway
+## Northflank
 
-The previous backend host, retired when the trial ended. These stay until the Northflank
-cutover in `docs/deployment.md` is verified.
+**The US East region refuses free projects.** Project creation fails there with a 409, so the
+services run in `us-central`, one region away from the database. Moving them to a paid region
+to close that gap is a billing decision, not a config change.
 
-**Redeploy after changing variables.** Setting a variable does not restart the service,
-and `--skip-deploys` guarantees it will not. Running containers keep the environment they
-started with. Rotating a credential without redeploying leaves the old value live until
-the next deploy, so the service keeps authenticating with a secret that no longer works.
+**The API and the worker get different secret groups.** `ratchet-db-admin` holds
+`ADMIN_DATABASE_URL` and is restricted to the worker. Attaching it to the API, or making it
+unrestricted, hands a `BYPASSRLS` connection to the request path, and nothing fails.
 
-**`DATABASE_URL` must be the `ratchet_app` role, never `postgres`.** Row-level security is
-enforced against `ratchet_app`; a superuser bypasses RLS entirely. If this is switched to
-the superuser, cross-tenant isolation silently stops applying, and nothing surfaces it —
-`/health` passes, `/db-check` passes, queries return rows. `ADMIN_DATABASE_URL` is the
-superuser and is used only for migrations, which create roles and set `FORCE` RLS.
+**`REDIS_URL` is linked from the addon, not typed in.** It is the addon's `REDIS_MASTER_URL`
+aliased in the `ratchet-shared` secret group. Recreating the addon changes the URL; relink it
+rather than pasting the new value.
 
-**`preDeployCommand` only takes effect from `railway.json`.** When a config file is set on
-the service, that file's `deploy` section is the authoritative manifest and any
-service-level setting is ignored — silently, without warning. A service-level
-`preDeployCommand` of a nonexistent binary still deploys successfully, which means you
-cannot trust a passing deploy as evidence the command ran.
-
-**Keep services in one region.** The API, workers, and Postgres talk over private
-networking. A service moved to another region reaches its database across the Atlantic, or
-not at all.
+**Keep the Redis addon on `noeviction`.** The event stream lives in Redis. Any other policy
+drops stream entries under memory pressure, and the only symptom is tasks arriving minutes late
+when the outbox redrive recovers them.
 
 ## Vercel
 
